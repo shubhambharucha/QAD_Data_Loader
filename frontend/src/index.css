@@ -1,0 +1,253 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cyan-glow: rgba(34, 211, 238, 0.5);
+  --cyan-soft: rgba(34, 211, 238, 0.15);
+  --navy-deep: #020d1a;
+  --navy-mid: #061828;
+  --navy-card: #0a2236;
+  --navy-border: rgba(34, 211, 238, 0.15);
+  --text-primary: #e2f4f8;
+  --text-secondary: rgba(178, 230, 240, 0.65);
+  --accent-cyan: #22d3ee;
+  --accent-teal: #0d9488;
+  --accent-glow: #67e8f9;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Syne', sans-serif;
+  background: var(--navy-deep);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--navy-deep); }
+::-webkit-scrollbar-thumb { background: var(--accent-teal); border-radius: 3px; }
+
+/* ── Canvas background ── */
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ── Glassmorphism card ── */
+.glass-card {
+  background: rgba(10, 34, 54, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--navy-border);
+  border-radius: 16px;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(34,211,238,0.08);
+}
+
+.glass-card-hover {
+  transition: all 0.3s ease;
+}
+.glass-card-hover:hover {
+  border-color: rgba(34, 211, 238, 0.4);
+  box-shadow: 0 0 24px rgba(34,211,238,0.12), 0 4px 32px rgba(0,0,0,0.4);
+  transform: translateY(-2px);
+}
+
+/* ── Glow effects ── */
+.glow-cyan {
+  box-shadow: 0 0 20px rgba(34,211,238,0.4), 0 0 60px rgba(34,211,238,0.15);
+}
+
+.glow-text {
+  text-shadow: 0 0 20px rgba(34,211,238,0.6);
+}
+
+/* ── Neon border ── */
+.neon-border {
+  border: 1px solid var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(34,211,238,0.3), inset 0 0 10px rgba(34,211,238,0.05);
+}
+
+/* ── Selected card ── */
+.card-selected {
+  border-color: var(--accent-cyan) !important;
+  background: rgba(34, 211, 238, 0.08) !important;
+  box-shadow: 0 0 20px rgba(34,211,238,0.2), 0 4px 32px rgba(0,0,0,0.4) !important;
+}
+
+/* ── Buttons ── */
+.btn-cyan {
+  background: linear-gradient(135deg, #0891b2, #0d9488);
+  color: white;
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-cyan::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.btn-cyan:hover:not(:disabled)::before { opacity: 1; }
+.btn-cyan:hover:not(:disabled) {
+  box-shadow: 0 0 24px rgba(34,211,238,0.5);
+  transform: translateY(-1px);
+}
+.btn-cyan:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-green {
+  background: linear-gradient(135deg, #059669, #0d9488);
+  color: white;
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+.btn-green:hover:not(:disabled) {
+  box-shadow: 0 0 24px rgba(16,185,129,0.5);
+  transform: translateY(-1px);
+}
+.btn-green:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Progress bar ── */
+.progress-bar-track {
+  background: rgba(34,211,238,0.1);
+  border-radius: 4px;
+  height: 4px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0891b2, #22d3ee, #67e8f9);
+  border-radius: 4px;
+  animation: progressPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes progressPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ── Scan line animation ── */
+@keyframes scanLine {
+  0% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 0.5; }
+  90% { opacity: 0.5; }
+  100% { transform: translateY(400%); opacity: 0; }
+}
+
+.scan-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.6), transparent);
+  animation: scanLine 3s linear infinite;
+  pointer-events: none;
+}
+
+/* ── Spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
+/* ── Fade/slide ── */
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.anim-in { animation: fadeSlideUp 0.5s ease forwards; }
+
+/* ── Mono font ── */
+.font-mono { font-family: 'Space Mono', monospace; }
+
+/* ── Checkbox custom ── */
+.cb-custom {
+  width: 18px; height: 18px;
+  border: 1.5px solid rgba(34,211,238,0.4);
+  border-radius: 4px;
+  background: transparent;
+  transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.cb-custom.checked {
+  background: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(34,211,238,0.5);
+}
+
+/* ── Table ── */
+.data-table th {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--navy-border);
+}
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(34,211,238,0.06);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: rgba(34,211,238,0.04); }
+
+/* ── Status badge ── */
+.badge-success {
+  background: rgba(16,185,129,0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16,185,129,0.3);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-family: 'Space Mono', monospace;
+}
+.badge-warning {
+  background: rgba(245,158,11,0.15);
+  color: #fcd34d;
+  border: 1px solid rgba(245,158,11,0.3);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-family: 'Space Mono', monospace;
+}
+.badge-error {
+  background: rgba(239,68,68,0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.3);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-family: 'Space Mono', monospace;
+}

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# React
+node_modules/
+dist/
+
+# Environment files
+.env
+.env.local
+
+# Runtime data
+Data/
+Archive/
+archive/
+
+# Excel files
+*.xlsx
+*.xls
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
