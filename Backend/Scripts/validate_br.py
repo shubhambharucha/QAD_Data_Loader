@@ -5,29 +5,31 @@ RED_FILL   = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="so
 CLEAR_FILL = PatternFill(fill_type=None)
 
 FIELD_RULES = {
-    "Business Relation": {"max_len": 20,   "type": "character"},
-    "Active":            {"max_len": None, "type": "logical"},
-    "Name":              {"max_len": 36,   "type": "character"},
-    "Search Name":       {"max_len": 28,   "type": "character"},
-    "Address Type":      {"max_len": 20,   "type": "character"},
-    "Address 1":         {"max_len": 36,   "type": "character"},
-    "City":              {"max_len": 20,   "type": "character"},
-    "State":             {"max_len": 4,    "type": "character"},
-    "Postal Code":       {"max_len": 10,   "type": "character"},
-    "Country":           {"max_len": 3,    "type": "character"},
-    "Language":          {"max_len": 2,    "type": "character"},
-    "Tax Zone":          {"max_len": 16,   "type": "character"},
+    "Business Relation": {"type": "character", "max_len": 20},
+    "Active":            {"type": "logical",   "max_len": None},
+    "Name":              {"type": "character", "max_len": 36},
+    "Search Name":       {"type": "character", "max_len": 28},
+    "Address Type":      {"type": "character", "max_len": 20},
+    "Address 1":         {"type": "character", "max_len": 36},
+    "City":              {"type": "character", "max_len": 20},
+    "State":             {"type": "character", "max_len": 4},
+    "Postal Code":       {"type": "character", "max_len": 10},
+    "Country":           {"type": "character", "max_len": 3},
+    "Language":          {"type": "character", "max_len": 2},
+    "Tax Zone":          {"type": "character", "max_len": 16},
 }
 
 ENTITY_COL    = "Business Relation"
 VALID_LOGICAL = {"yes", "no"}
+SKIP_STATUSES = {"DONE", "READY"}
 
 
 def validate(file_path):
     wb = openpyxl.load_workbook(file_path)
     ws = wb.active
 
-    header_row = [cell.value for cell in ws[1]]
+    raw_headers = [cell.value for cell in ws[1]]
+    header_row  = [str(h).strip() if h is not None else "" for h in raw_headers]
 
     if "Status" not in header_row:
         ws.cell(row=1, column=len(header_row) + 1, value="Status")
@@ -36,25 +38,34 @@ def validate(file_path):
         ws.cell(row=1, column=len(header_row) + 1, value="Error")
         header_row.append("Error")
 
-    status_col_idx = header_row.index("Status") + 1
-    error_col_idx  = header_row.index("Error")  + 1
+    if ENTITY_COL not in header_row:
+        raise ValueError(f"Required column missing: {ENTITY_COL}")
+
+    status_col_idx = header_row.index("Status")   + 1
+    error_col_idx  = header_row.index("Error")    + 1
     entity_col_idx = header_row.index(ENTITY_COL) + 1
 
-    has_errors  = False
-    error_count = 0
+    has_errors     = False
+    rows_processed = 0
+    rows_passed    = 0
+    rows_failed    = 0
+    rows_skipped   = 0
 
     for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
         row_values = [cell.value for cell in row]
 
         if not any(row_values):
+            rows_skipped += 1
             continue
 
         row_data = dict(zip(header_row, row_values))
 
-        current_status = str(row_data.get("Status", "")).strip().upper()
-        if current_status in ("DONE", "READY"):
+        current_status = str(row_data.get("Status", "") or "").strip().upper()
+        if current_status in SKIP_STATUSES:
+            rows_skipped += 1
             continue
 
+        rows_processed += 1
         row_errors      = []
         error_cell_idxs = []
 
@@ -74,7 +85,7 @@ def validate(file_path):
 
             if rule["type"] == "logical":
                 if str_val.lower() not in VALID_LOGICAL:
-                    row_errors.append(f"{col_name}: must be Yes/No (got '{str_val}')")
+                    row_errors.append(f"{col_name}: must be Yes or No (got '{str_val}')")
                     error_cell_idxs.append(col_idx)
                 continue
 
@@ -87,48 +98,85 @@ def validate(file_path):
             cell.fill = CLEAR_FILL
 
         if row_errors:
-            has_errors  = True
-            error_count += 1
+            has_errors = True
+            rows_failed += 1
             error_msg   = "; ".join(row_errors)
 
-            ws.cell(row=row_idx, column=status_col_idx, value="")
             ws.cell(row=row_idx, column=entity_col_idx).fill = RED_FILL
             for cidx in error_cell_idxs:
                 ws.cell(row=row_idx, column=cidx).fill = RED_FILL
-            ws.cell(row=row_idx, column=error_col_idx, value=error_msg).fill = RED_FILL
-
+            ws.cell(row=row_idx, column=error_col_idx,  value=error_msg).fill = RED_FILL
+            ws.cell(row=row_idx, column=status_col_idx, value="ERROR")
         else:
+            rows_passed += 1
             ws.cell(row=row_idx, column=status_col_idx, value="READY")
             ws.cell(row=row_idx, column=error_col_idx,  value="")
 
     wb.save(file_path)
-    return has_errors, error_count
 
-if __name__ == "__main__":
+    return {
+        "has_errors":     has_errors,
+        "rows_processed": rows_processed,
+        "rows_passed":    rows_passed,
+        "rows_failed":    rows_failed,
+        "rows_skipped":   rows_skipped,
+    }
+
+# ---------------------------------------------------------------------------
+# Standalone testing mode
+# ---------------------------------------------------------------------------
+def run_standalone():
+
     import sys
     import os
 
-    if len(sys.argv) < 2:
-        # No argument given — auto-find .xlsx files in current directory
-        xlsx_files = [f for f in os.listdir(".") if f.endswith(".xlsx")]
-        if not xlsx_files:
-            print("ERROR: No .xlsx file found. Usage: python validate_br.py <file.xlsx>")
-            sys.exit(1)
-        file_path = xlsx_files[0]
-        print(f"No file specified — using: {file_path}")
-    else:
-        file_path = sys.argv[1]
+    #Temporary fix for standalone execution in cmd
+    ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    
+    sys.path.append(ROOT_DIR)
 
-    if not os.path.exists(file_path):
-        print(f"ERROR: File not found: {file_path}")
+    from config import CONFIG
+
+    folder = os.path.abspath(os.path.join(ROOT_DIR, CONFIG["folders"]["BR"]))
+
+    if not os.path.exists(folder):
+        print(f"ERROR: Folder not found: {folder}")
+        sys.exit(1)
+    
+    xlsx_files = [f for f in os.listdir(folder) if f.endswith(".xlsx") and not f.startswith("~$")]
+
+    if not xlsx_files:
+        print(f"ERROR: No .xlsx file found in folder: {folder}")
         sys.exit(1)
 
-    print(f"Validating: {file_path} ...")
-    has_errors, error_count = validate(file_path)
+    total_processed = 0
+    total_failed   = 0
 
-    if has_errors:
-        print(f"VALIDATION FAILED — {error_count} row(s) have errors. Check the file for red highlights.")
-        sys.exit(1)
-    else:
-        print(f"VALIDATION PASSED — all rows are valid and marked READY.")
-        sys.exit(0)
+    for file_name in xlsx_files:
+
+        file_path = os.path.join(folder, file_name)
+
+        print(f"Validating: {file_path} ...")
+
+        result = validate(file_path)
+
+        print("\nValidation Summary")
+        print("------------------------------")
+        print(f"Rows processed : {result['rows_processed']}")
+        print(f"Rows passed    : {result['rows_passed']}")
+        print(f"Rows failed    : {result['rows_failed']}")
+        print(f"Rows skipped   : {result['rows_skipped']}")
+
+        total_processed += result["rows_processed"]
+        total_failed    += result["rows_failed"]
+
+        if result["has_errors"]:
+            print("\nValidation FAILED")
+        else:
+            print("\nValidation PASSED — all rows are READY for Loading.")
+
+    #outside loop    
+    sys.exit(0 if total_failed == 0 else 1)
+
+if __name__ == "__main__":
+    run_standalone()

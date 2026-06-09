@@ -1,0 +1,25 @@
+{
+  "qad": {
+    "base_url": "https://cat5-devl.adaptive.qad.com/clouderp",
+
+    "auth": {
+      "client_id": "afb97fd221925b87f01489aeb0e02e81",
+      "username": "demo",
+      "password": "qad",
+      "grant_type": "password"
+    }
+  },
+
+  "folders": {
+    "BR": "../Data/BR",
+    "GCM": "../Data/GCM",
+    "supplier": "../Data/Supplier",
+    "customer": "../Data/Customer",
+    "purchase_order": "../Data/PurchaseOrder",
+    "sales_order": "../Data/SalesOrder",
+    "production_order": "../Data/ProductionOrder",
+    "item": "../Data/Item",  
+    "supplier_item": "../Data/Supplier_Item",
+    "supplier_price_list": "../Data/SupplierPriceList"
+  }
+}
