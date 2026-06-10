@@ -1,153 +1,170 @@
-import { useEffect, useRef } from "react";
-import { motion } from "framer-motion";
-import DataLoadDashboard from "./components/DataLoadDashboard";
-import "./index.css";
+import { useState, useEffect, useRef } from "react";
+import Header from "./components/Header";
+import EntityGrid from "./components/EntityGrid";
+import ActionButtons from "./components/ActionButtons";
+import ResultsTable from "./components/ResultsTable";
+import BackgroundLines from "./components/BackgroundLines";
+import "./App.css";
 
-/* ── Constellation canvas ── */
-function ConstellationBg() {
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    let raf;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    const NUM = 90;
-    const dots = Array.from({ length: NUM }, () => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      vx: (Math.random() - 0.5) * 0.25,
-      vy: (Math.random() - 0.5) * 0.25,
-      r: Math.random() * 1.5 + 0.5,
-      alpha: Math.random() * 0.5 + 0.3,
-    }));
-
-    const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // move
-      dots.forEach(d => {
-        d.x += d.vx;
-        d.y += d.vy;
-        if (d.x < 0) d.x = canvas.width;
-        if (d.x > canvas.width) d.x = 0;
-        if (d.y < 0) d.y = canvas.height;
-        if (d.y > canvas.height) d.y = 0;
-      });
-
-      // lines
-      for (let i = 0; i < dots.length; i++) {
-        for (let j = i + 1; j < dots.length; j++) {
-          const dx = dots[i].x - dots[j].x;
-          const dy = dots[i].y - dots[j].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 130) {
-            ctx.beginPath();
-            ctx.moveTo(dots[i].x, dots[i].y);
-            ctx.lineTo(dots[j].x, dots[j].y);
-            ctx.strokeStyle = `rgba(34,211,238,${(1 - dist / 130) * 0.18})`;
-            ctx.lineWidth = 0.6;
-            ctx.stroke();
-          }
-        }
-      }
-
-      // dots
-      dots.forEach(d => {
-        ctx.beginPath();
-        ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(34,211,238,${d.alpha})`;
-        ctx.fill();
-      });
-
-      raf = requestAnimationFrame(draw);
-    };
-    draw();
-
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
-
-  return <canvas ref={canvasRef} style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none" }} />;
-}
+const ENTITIES = [
+  { id: "Supplier", label: "Supplier", sub: "Vendors, contracts, sites" },
+  { id: "Customer", label: "Customer", sub: "Accounts, addresses" },
+  { id: "GCM", label: "GCM", sub: "Global cost masters" },
+  { id: "BR", label: "BR", sub: "Business relations" },
+  { id: "Customer_Item", label: "Customer Item", sub: "Customer item cross-refs" },
+  { id: "ProductionOrder", label: "ProductionOrder", sub: "Production order headers" },
+  { id: "PurchaseOrder", label: "PurchaseOrder", sub: "PO headers & lines" },
+  { id: "SalesOrder", label: "SalesOrder", sub: "SO headers & lines" },
+  { id: "Supplier_Item", label: "Supplier Item", sub: "Supplier item cross-refs" },
+  { id: "SupplierPriceList", label: "SupplierPriceList", sub: "Supplier price lists" },
+];
 
 export default function App() {
+  const [selected, setSelected] = useState(new Set());
+  const [fileCounts, setFileCounts] = useState({});
+  const [cardStates, setCardStates] = useState({});   // { [entity]: 'idle'|'processing'|'success'|'failed' }
+  const [processingFile, setProcessingFile] = useState({}); // { [entity]: filename }
+  const [results, setResults] = useState([]);
+  const [lineState, setLineState] = useState("idle"); // 'idle'|'burst'|'fail'
+  const [opInProgress, setOpInProgress] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const lineTimerRef = useRef(null);
+
+  // Poll status every 5s
+  useEffect(() => {
+    fetchStatus();
+    const id = setInterval(fetchStatus, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch("http://localhost:8000/api/status");
+      const data = await res.json();
+      const counts = {};
+      for (const [k, v] of Object.entries(data)) counts[k] = v.count;
+      setFileCounts(counts);
+    } catch {
+      // backend not running — silently ignore
+    }
+  }
+
+  function toggleEntity(id) {
+    if (opInProgress) return;
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function triggerLineBurst(fail = false) {
+    clearTimeout(lineTimerRef.current);
+    setLineState(fail ? "fail" : "burst");
+    lineTimerRef.current = setTimeout(() => setLineState("idle"), fail ? 1500 : 800);
+  }
+
+  async function runOperation(type) {
+    if (selected.size === 0 || opInProgress) return;
+    setOpInProgress(true);
+    setShowResults(false);
+    setResults([]);
+    const newCardStates = {};
+    selected.forEach(e => { newCardStates[e] = "processing"; });
+    setCardStates(newCardStates);
+    triggerLineBurst(false);
+
+    const endpoint = type === "validate" ? "/api/validate" : "/api/load";
+    let anyFailed = false;
+    const newResults = [];
+
+    try {
+      const res = await fetch(`http://localhost:8000${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entities: [...selected] }),
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === "progress") {
+              setProcessingFile(prev => ({ ...prev, [event.entity]: event.file }));
+            }
+
+            if (event.type === "entity_result") {
+              const ok = event.ok;
+              if (!ok) anyFailed = true;
+              setCardStates(prev => ({ ...prev, [event.entity]: ok ? "success" : "failed" }));
+              setProcessingFile(prev => { const n = { ...prev }; delete n[event.entity]; return n; });
+            }
+
+            if (event.type === "file_result") {
+              const ok = event.fail === 0 || event.fail === "0";
+              if (!ok) anyFailed = true;
+              newResults.push(event);
+              setResults([...newResults]);
+              setCardStates(prev => ({
+                ...prev,
+                [event.entity]: (!ok && prev[event.entity] !== "failed") ? "failed" : (ok && prev[event.entity] !== "failed" ? "success" : prev[event.entity]),
+              }));
+            }
+
+            if (event.type === "done") {
+              triggerLineBurst(anyFailed);
+              if (anyFailed) setLineState("fail");
+              setShowResults(true);
+            }
+          } catch { /* malformed event */ }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      selected.forEach(e => {
+        setCardStates(prev => ({ ...prev, [e]: "failed" }));
+      });
+      anyFailed = true;
+      triggerLineBurst(true);
+    }
+
+    setOpInProgress(false);
+    fetchStatus();
+  }
+
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #020d1a 0%, #041220 50%, #020d1a 100%)", position: "relative" }}>
-      <ConstellationBg />
-
-      {/* Ambient glowing orbs */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", overflow: "hidden" }}>
-        <motion.div
-          style={{ position: "absolute", top: "-10%", left: "15%", width: 500, height: 500, borderRadius: "50%", background: "radial-gradient(circle, rgba(8,145,178,0.12) 0%, transparent 70%)", filter: "blur(40px)" }}
-          animate={{ scale: [1, 1.15, 1], opacity: [0.6, 0.9, 0.6] }}
-          transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
+    <div className="app-root">
+      <BackgroundLines state={lineState} />
+      <div className="app-content">
+        <Header />
+        <EntityGrid
+          entities={ENTITIES}
+          selected={selected}
+          fileCounts={fileCounts}
+          cardStates={cardStates}
+          processingFile={processingFile}
+          onToggle={toggleEntity}
         />
-        <motion.div
-          style={{ position: "absolute", bottom: "5%", right: "10%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(13,148,136,0.1) 0%, transparent 70%)", filter: "blur(40px)" }}
-          animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0.8, 0.5] }}
-          transition={{ duration: 22, repeat: Infinity, ease: "easeInOut", delay: 4 }}
+        <ActionButtons
+          hasSelection={selected.size > 0}
+          inProgress={opInProgress}
+          onValidate={() => runOperation("validate")}
+          onLoad={() => runOperation("load")}
         />
-        <motion.div
-          style={{ position: "absolute", top: "40%", right: "25%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(34,211,238,0.07) 0%, transparent 70%)", filter: "blur(30px)" }}
-          animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.7, 0.4] }}
-          transition={{ duration: 14, repeat: Infinity, ease: "easeInOut", delay: 2 }}
-        />
+        {showResults && results.length > 0 && <ResultsTable results={results} />}
       </div>
-
-      {/* Nav */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 50, borderBottom: "1px solid rgba(34,211,238,0.12)", background: "rgba(2,13,26,0.85)", backdropFilter: "blur(20px)" }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "0 24px", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {/* Logo — replace src with your actual image path, e.g. "/logo.png" */}
-            <div style={{ width: 38, height: 38, borderRadius: 10, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 16px rgba(34,211,238,0.4)" }}>
-              <img
-                src="/yash-logo.png"
-                alt="YASH Logo"
-                style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                onError={e => {
-                  // Fallback to initials if image not found
-                  e.target.style.display = "none";
-                  e.target.parentNode.style.background = "linear-gradient(135deg, #0891b2, #0d9488)";
-                  e.target.parentNode.innerHTML = '<span style="font-family:Syne,sans-serif;font-weight:700;font-size:0.75rem;color:white;letter-spacing:0.05em">YT</span>';
-                }}
-              />
-            </div>
-            <div>
-              <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 700, fontSize: "1.1rem", color: "#e2f4f8", letterSpacing: "0.03em" }}>
-                YASH QAD <span style={{ color: "#22d3ee" }}>DataLoader</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Nav right */}
-          <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-            <span style={{ fontFamily: "'Space Mono', monospace", fontSize: "0.7rem", color: "rgba(34,211,238,0.6)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-              Enterprise Edition
-            </span>
-            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22d3ee", boxShadow: "0 0 8px rgba(34,211,238,0.8)", animation: "pulse 2s ease-in-out infinite" }} />
-          </div>
-        </div>
-      </nav>
-
-      {/* Main content */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.6 }}
-        style={{ position: "relative", zIndex: 10 }}
-      >
-        <DataLoadDashboard />
-      </motion.div>
     </div>
   );
 }

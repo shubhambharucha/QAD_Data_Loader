@@ -1,0 +1,117 @@
+/* ── Root container ──────────────────────────────────────── */
+.bg-lines-root {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* ── Bar clusters ────────────────────────────────────────── */
+.bar-cluster {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.bar-cluster--left {
+  left: 0;
+  transform: translateX(-30%);
+  opacity: 0.45;
+}
+
+.bar-cluster--right {
+  right: 0;
+  transform: translateX(30%);
+  opacity: 0.45;
+}
+
+/* ── Individual bar ──────────────────────────────────────── */
+.bar {
+  width: 14px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(
+    to top,
+    rgba(0, 255, 120, 0.0)  0%,
+    rgba(0, 255, 120, 0.25) 30%,
+    rgba(0, 255, 120, 0.55) 70%,
+    rgba(0, 255, 120, 0.7)  100%
+  );
+  /* height driven by --bar-h custom prop, animated */
+  height: calc(var(--bar-h, 0.5) * 70vh);
+  animation: bar-breathe 4s ease-in-out infinite;
+}
+
+@keyframes bar-breathe {
+  0%, 100% {
+    height: calc(var(--bar-h, 0.5) * 70vh);
+    opacity: 1;
+  }
+  50% {
+    height: calc(var(--bar-h, 0.5) * 70vh * 0.82);
+    opacity: 0.65;
+  }
+}
+
+/* ── BURST state (button click) ──────────────────────────── */
+.bg-lines-root.burst .bar-cluster {
+  opacity: 0.85;
+}
+
+.bg-lines-root.burst .bar {
+  animation: bar-burst 0.8s ease-out forwards;
+}
+
+@keyframes bar-burst {
+  0%   {
+    height: calc(var(--bar-h, 0.5) * 70vh);
+    filter: brightness(1);
+  }
+  25%  {
+    height: calc(var(--bar-h, 0.5) * 92vh);
+    filter: brightness(2.2);
+  }
+  100% {
+    height: calc(var(--bar-h, 0.5) * 70vh);
+    filter: brightness(1);
+  }
+}
+
+/* ── FAIL state (red burst) ──────────────────────────────── */
+.bg-lines-root.fail .bar-cluster {
+  opacity: 0.9;
+}
+
+.bg-lines-root.fail .bar {
+  background: linear-gradient(
+    to top,
+    rgba(255, 60, 60, 0.0)  0%,
+    rgba(255, 60, 60, 0.25) 30%,
+    rgba(255, 60, 60, 0.55) 70%,
+    rgba(255, 60, 60, 0.75) 100%
+  );
+  animation: bar-fail 1.5s ease-out forwards;
+}
+
+@keyframes bar-fail {
+  0%   {
+    height: calc(var(--bar-h, 0.5) * 70vh);
+    filter: brightness(1);
+  }
+  20%  {
+    height: calc(var(--bar-h, 0.5) * 95vh);
+    filter: brightness(2.5);
+  }
+  100% {
+    height: calc(var(--bar-h, 0.5) * 70vh);
+    filter: brightness(1);
+  }
+}
+
+/* ── Responsive: tighten on mobile ──────────────────────── */
+@media (max-width: 768px) {
+  .bar { width: 10px; }
+  .bar-cluster { gap: 4px; }
+}

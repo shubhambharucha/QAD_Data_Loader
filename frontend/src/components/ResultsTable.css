@@ -1,0 +1,117 @@
+.results-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border-idle);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  animation: fade-in 0.4s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-idle);
+}
+
+.results-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--green);
+  opacity: 0.8;
+}
+
+.results-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.results-table-wrap {
+  overflow-x: auto;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.results-table th {
+  padding: 8px 14px;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-idle);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.results-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.results-table tr:last-child td { border-bottom: none; }
+
+/* ── Row states ────────────────────────────────────────── */
+.row-ok {
+  border-left: 2px solid rgba(0,255,120,0.4);
+}
+
+.row-fail {
+  border-left: 2px solid rgba(255,60,60,0.45);
+}
+
+.row-ok:hover  td { background: rgba(0,255,120,0.03); }
+.row-fail:hover td { background: rgba(255,60,60,0.03); }
+
+/* ── Specific cells ────────────────────────────────────── */
+.cell-entity {
+  color: var(--text-primary) !important;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cell-file {
+  color: var(--text-secondary) !important;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-ok  { color: var(--green) !important; font-weight: 500; }
+.cell-fail { color: var(--red) !important; font-weight: 500; }
+
+.cell-note {
+  font-size: 11px;
+  color: var(--text-secondary) !important;
+  max-width: 200px;
+}
+
+/* ── Status pill ───────────────────────────────────────── */
+.status-pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.status-pill.archived  { color: var(--green); background: rgba(0,255,120,0.1); border: 1px solid rgba(0,255,120,0.2); }
+.status-pill.partial   { color: #ffb340; background: rgba(255,179,64,0.1); border: 1px solid rgba(255,179,64,0.25); }
+.status-pill.error     { color: var(--red); background: rgba(255,60,60,0.1); border: 1px solid rgba(255,60,60,0.2); }
+.status-pill.pending   { color: var(--text-secondary); background: rgba(255,255,255,0.05); border: 1px solid var(--border-idle); }
