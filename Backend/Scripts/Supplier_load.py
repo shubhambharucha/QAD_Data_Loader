@@ -7,7 +7,7 @@ into QAD via the supplierV2s API.
 Behaviour
 ---------
 - Fetches one OAuth token per run; refreshes only on 401
-- Skips rows with Status = DONE
+- Skips rows with Status = DONE (for Create operations only)
 - Lightweight mandatory-field check before any API call
 - Success check: submitResult.success == True
 - Error messages extracted from submitResult.errors[].message
@@ -90,8 +90,6 @@ def build_payload(row: dict) -> dict:
 
     supplier_code = val("Supplier")
     shared_set    = val("Shared Set")
-    data_operation = val("Data Operation").upper() or "C"
-    Auto_Populate = "Default"
     uri           = f"urn:be:com.qad.base.supplier.ISupplierV2:{shared_set}.{supplier_code}"
 
     return {
@@ -102,9 +100,9 @@ def build_payload(row: dict) -> dict:
                 "supplierCode":                     supplier_code,
                 "sharedSetCode":                    shared_set,
                 "businessRelationCode":             val("Business Relation"),
-                "addressSearchName":                Auto_Populate,
-                "city":                             Auto_Populate,
-                "street1":                          Auto_Populate,
+                "addressSearchName":                "Default",
+                "city":                             "Default",
+                "street1":                          "Default",
                 "taxZone":                          val("Tax Zone"),
                 "isActive":                         val("Active").lower() == "yes",
                 "currencyCode":                     val("Currency"),
@@ -118,7 +116,7 @@ def build_payload(row: dict) -> dict:
                 "businessRelationID":               0,
                 "changeStatus":                     "2",
                 "isBusinessRelationActive":         True,
-                "dataOperation":                    data_operation,
+                "dataOperation":                    "",          # blank = CREATE (QAD convention)
                 "concurrencyHash":                  "",
                 "disallowedActions":                "",
                 "disallowedActionsMessage":         "",
@@ -139,23 +137,32 @@ class _TokenExpired(Exception):
     pass
 
 
-
-def post_supplier(payload: dict, token: str) -> tuple[bool, str]:
+def post_supplier(payload: dict, token: str, is_create: bool = False) -> tuple[bool, str]:
     """
     POST supplier payload to QAD.
     Returns (success, error_msg). Raises _TokenExpired on 401.
+
+    CREATE → viewUri only  (no sharedSetCode/supplierCode in query string)
+    UPDATE → domainCode + sharedSetCode + supplierCode + viewUri
     """
-
-    supplier = payload["supplierV2s"][0]
-
-    shared_set = supplier.get("sharedSetCode", "")
+    supplier      = payload["supplierV2s"][0]
+    shared_set    = supplier.get("sharedSetCode", "")
     supplier_code = supplier.get("supplierCode", "")
-    
-    url = (
-        f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
-        f"?domainCode=&sharedSetCode={shared_set}&supplierCode={supplier_code}"
-        f"&viewUri=urn:be:com.qad.base.supplier.ISupplierV2"
-    )
+
+    if is_create:
+        # QAD UI sends only viewUri for new records — adding supplierCode causes
+        # a record-lookup that fails because the record doesn't exist yet
+        url = (
+            f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
+            f"?viewUri=urn:be:com.qad.base.supplier.ISupplierV2"
+        )
+    else:
+        url = (
+            f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
+            f"?domainCode=&sharedSetCode={shared_set}&supplierCode={supplier_code}"
+            f"&viewUri=urn:be:com.qad.base.supplier.ISupplierV2"
+        )
+
     resp = requests.post(
         url,
         headers={
@@ -184,8 +191,9 @@ def post_supplier(payload: dict, token: str) -> tuple[bool, str]:
 
     return False, error_msg
 
+
 def get_supplier(shared_set: str, supplier_code: str, token: str) -> dict:
-    
+
     url = f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
 
     resp = requests.get(
@@ -194,15 +202,16 @@ def get_supplier(shared_set: str, supplier_code: str, token: str) -> dict:
             "Authorization": f"Bearer {token}",
         },
         params={
-            "domainCode": "",
+            "domainCode":    "",
             "sharedSetCode": shared_set,
-            "supplierCode": supplier_code,
-            "viewUri": "urn:be:com.qad.base.supplier.ISupplierV2",
+            "supplierCode":  supplier_code,
+            "viewUri":       "urn:be:com.qad.base.supplier.ISupplierV2",
         },
         timeout=30,
     )
 
     return resp.json()
+
 
 # =============================================================================
 # 4. WORKBOOK HELPERS
@@ -249,16 +258,16 @@ def _check_mandatory(row_data: dict) -> list[str]:
             missing.append(col)
     return missing
 
+
 # =============================================================================
 # 6. SINGLE-FILE PROCESSOR
 # =============================================================================
 
 def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
-    """Open one workbook, process every row, return (ok_count, fail_count)."""  
+    """Open one workbook, process every row, return (ok_count, fail_count)."""
 
     wb = openpyxl.load_workbook(file_path)
     ws = wb.active
-
 
     header_row = [
         str(c.value).strip() if c.value is not None else ""
@@ -285,11 +294,10 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
         row_data = dict(zip(header_row, row_values))
 
-        status = str(row_data.get("Status", "")).strip().upper()
+        status         = str(row_data.get("Status", "")).strip().upper()
+        data_operation = str(row_data.get("Data Operation", "")).strip().upper() or "C"
 
-        data_operation = str(row_data.get("Data Operation", " ")).strip().upper() or "C"
-
-        #Skip completed CREATE rows only
+        # Skip completed CREATE rows only
         if status == "DONE" and data_operation == "C":
             continue
 
@@ -302,56 +310,55 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                 missing,
                 f"Missing mandatory fields: {', '.join(missing)}",
             )
-
             wb.save(file_path)
             continue
 
-   
-
-        if data_operation and data_operation not in {"C", "U"}:
+        # Operation validity check
+        if data_operation not in {"C", "U"}:
             fail_count += 1
             _mark_error(
-                ws, row_idx, status_col, error_col, header_row, ["Data Operation"], "Data Operation must be C, U, or blank"
+                ws, row_idx, status_col, error_col, header_row,
+                ["Data Operation"],
+                "Data Operation must be C, U, or blank",
             )
-
             wb.save(file_path)
             continue
 
-        # API call with one token-refresh retry on 401
-        #Build Payload
+        # ── Build payload ─────────────────────────────────────────────────
+        is_create = (data_operation == "C")
 
         if data_operation == "U":
-
+            # GET existing object → hydrate → patch editable fields → POST back
             existing = get_supplier(
                 row_data.get("Shared Set", ""),
                 row_data.get("Supplier", ""),
-                tm.get()
+                tm.get(),
             )
 
-            payload = existing["data"]
-
+            payload  = existing["data"]
             supplier = payload["supplierV2s"][0]
 
-            supplier["businessRelationCode"] = str(row_data.get("Business Relation", "")).strip()
-            supplier["isActive"] = str(row_data.get("Active", "")).strip().lower() == "yes"
-            supplier["currencyCode"] = str(row_data.get("Currency", "")).strip()
-            supplier["creditTermsCode"] = str(row_data.get("Credit Terms", "")).strip()
-            supplier["invoiceStatusCode"] = str(row_data.get("Invoice Status", "")).strip()
-            supplier["invoiceControlGLProfileCode"] = str(row_data.get("Invoice Control GL Profile", "")).strip()
-            supplier["creditNoteControlGLProfileCode"] = str(row_data.get("Credit Note Control GL Profile", "")).strip()
-            supplier["prePaymentControlGLProfileCode"] = str(row_data.get("Prepayment Control GL Profile", "")).strip()
-            supplier["purchaseAccountGLProfileCode"] = str(row_data.get("Purchase Account GL Profile", "")).strip()
-            supplier["taxZone"] = str(row_data.get("Tax Zone", "")).strip()
+            supplier["businessRelationCode"]          = str(row_data.get("Business Relation", "")).strip()
+            supplier["isActive"]                      = str(row_data.get("Active", "")).strip().lower() == "yes"
+            supplier["currencyCode"]                  = str(row_data.get("Currency", "")).strip()
+            supplier["creditTermsCode"]               = str(row_data.get("Credit Terms", "")).strip()
+            supplier["invoiceStatusCode"]             = str(row_data.get("Invoice Status", "")).strip()
+            supplier["invoiceControlGLProfileCode"]   = str(row_data.get("Invoice Control GL Profile", "")).strip()
+            supplier["creditNoteControlGLProfileCode"]= str(row_data.get("Credit Note Control GL Profile", "")).strip()
+            supplier["prePaymentControlGLProfileCode"]= str(row_data.get("Prepayment Control GL Profile", "")).strip()
+            supplier["purchaseAccountGLProfileCode"]  = str(row_data.get("Purchase Account GL Profile", "")).strip()
+            supplier["taxZone"]                       = str(row_data.get("Tax Zone", "")).strip()
 
         else:
             payload = build_payload(row_data)
-        
+
+        # ── API call with one token-refresh retry on 401 ──────────────────
         success   = False
         error_msg = ""
 
         for attempt in range(2):
             try:
-                success, error_msg = post_supplier(payload, tm.get())
+                success, error_msg = post_supplier(payload, tm.get(), is_create=is_create)
                 break
             except _TokenExpired:
                 if attempt == 0:
@@ -391,7 +398,7 @@ def run(folder_path: str) -> tuple[int, int]:
         print(f"ERROR: Folder not found: {folder}")
         raise RuntimeError(f"Folder not found: {folder}")
 
-    xlsx_files = [    
+    xlsx_files = [
         f for f in os.listdir(folder)
         if f.endswith(".xlsx") and not f.startswith("~$")
     ]
