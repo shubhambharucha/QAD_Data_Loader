@@ -236,8 +236,9 @@ def _mark_error(
     for cell in ws[row_idx]:
         cell.fill = CLEAR_FILL
 
-    ws.cell(row=row_idx, column=1).fill         = RED_FILL
-    ws.cell(row=row_idx, column=error_col).fill = RED_FILL
+    ws.cell(row=row_idx, column=1).fill          = RED_FILL
+    ws.cell(row=row_idx, column=status_col).fill = RED_FILL
+    ws.cell(row=row_idx, column=error_col).fill  = RED_FILL
     ws.cell(row=row_idx, column=status_col, value="ERROR")
     ws.cell(row=row_idx, column=error_col,  value=error_msg)
 
