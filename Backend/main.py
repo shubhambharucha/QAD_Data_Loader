@@ -13,6 +13,7 @@ from typing import List
 
 # ── Path setup ────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "Data")
 SCRIPTS_DIR = os.path.join(BASE_DIR, "Scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
@@ -20,7 +21,7 @@ app = FastAPI(title="QAD Data Loader API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -61,11 +62,11 @@ LOAD_MAP = {
 # ── Helpers ───────────────────────────────────────────────────────────────
 def ensure_folders():
     for e in ENTITIES:
-        os.makedirs(os.path.join(BASE_DIR, e), exist_ok=True)
-        os.makedirs(os.path.join(BASE_DIR, "Archive", e), exist_ok=True)
+        os.makedirs(os.path.join(DATA_DIR, e), exist_ok=True)
+        os.makedirs(os.path.join(DATA_DIR, "Archive", e), exist_ok=True)
 
 def get_xlsx(entity: str) -> List[str]:
-    folder = os.path.join(BASE_DIR, entity)
+    folder = os.path.join(DATA_DIR, entity)
     if not os.path.exists(folder):
         return []
     return [f for f in os.listdir(folder) if f.endswith(".xlsx") and not f.startswith("~$")]
@@ -73,13 +74,13 @@ def get_xlsx(entity: str) -> List[str]:
 def archive_file(entity: str, fp: str):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(
-        BASE_DIR, "Archive", entity,
+        DATA_DIR, "Archive", entity,
         f"{os.path.splitext(os.path.basename(fp))[0]}_{ts}.xlsx"
     )
     shutil.move(fp, dest)
 
 def apply_error_prefix(entity: str, filename: str) -> str:
-    folder = os.path.join(BASE_DIR, entity)
+    folder = os.path.join(DATA_DIR, entity)
     if not filename.startswith("error_"):
         src = os.path.join(folder, filename)
         dst = os.path.join(folder, "error_" + filename)
@@ -89,7 +90,7 @@ def apply_error_prefix(entity: str, filename: str) -> str:
     return filename
 
 def remove_error_prefix(entity: str, filename: str) -> str:
-    folder = os.path.join(BASE_DIR, entity)
+    folder = os.path.join(DATA_DIR, entity)
     if filename.startswith("error_"):
         src = os.path.join(folder, filename)
         dst = os.path.join(folder, filename[len("error_"):])
@@ -166,12 +167,13 @@ def validate_stream(req: EntityRequest):
 
             error_files = []
             for f in files:
-                fp = os.path.join(BASE_DIR, entity, f)
+                fp = os.path.join(DATA_DIR, entity, f)
                 yield sse_event({"type": "progress", "entity": entity, "file": f})
                 await asyncio.sleep(0)  # yield control
 
                 try:
-                    has_err, _ = mod.validate(fp)
+                    result = mod.validate(fp)
+                    has_err = result.get("has_errors", False)
                     if has_err:
                         error_files.append(f)
                         apply_error_prefix(entity, f)
@@ -229,15 +231,17 @@ def load_stream(req: EntityRequest):
                 continue
 
             for f in files:
-                fp = os.path.join(BASE_DIR, entity, f)
+                fp = os.path.join(DATA_DIR, entity, f)
                 yield sse_event({"type": "progress", "entity": entity, "file": f})
                 await asyncio.sleep(0)
 
                 try:
-                    ok_count, fail_count = mod.run(fp)
+                    tm = getattr(mod, 'TokenManager', None)
+                    token_manager = tm() if tm else None
+                    ok_count, fail_count = mod.run(fp, token_manager)
                     if fail_count == 0:
                         restored = remove_error_prefix(entity, f)
-                        archive_file(entity, os.path.join(BASE_DIR, entity, restored))
+                        archive_file(entity, os.path.join(DATA_DIR, entity, restored))
                         status, note = "archived", "Archived"
                     else:
                         apply_error_prefix(entity, f)
