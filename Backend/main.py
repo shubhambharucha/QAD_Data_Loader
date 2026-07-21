@@ -4,22 +4,13 @@ main.py  —  QAD Data Loader FastAPI Backend
 Endpoints
 ---------
 POST /api/validate        { "entities": ["Supplier", "Customer", ...] }
-POST /api/load            { "entities": ["Supplier", "Customer", ...] }
+POST /api/load             { "entities": ["Supplier", "Customer", ...] }
 POST /api/upload-json     { "entity": "Supplier_Item", "data": [...rows...], "filename": "optional" }
 GET  /api/config
 POST /api/save-config
 POST /api/test-connection
 GET  /health
 
-upload-json flow
-----------------
-  1. Receive JSON rows from KNIME
-  2. Load entity config from entity_configs/<Entity>.py
-     - Apply COLUMN_ALIASES  (rename KNIME cols → internal names)
-     - Inject DEFAULTS        (e.g. Domain Code = "10USA")
-     - Fill OPTIONAL_FIELDS   (missing cols → "" instead of NaN)
-  3. Write DataFrame → .xlsx inside Data/<Entity>/
-  4. Existing validate + load endpoints pick it up unchanged
 
 File-rename logic (validate & load)
 ------------------------------------
@@ -514,9 +505,26 @@ async def load_stream(entities: list[str]) -> AsyncGenerator[str, None]:
                     else:
                         tm = mod.TokenManager()
                         mod._tm = tm
+
                     ok, fail = mod.process_file(file_path, tm)
+                    print(f"[main.py] process_file done for {filename}: ok={ok} fail={fail}")
+
+                    # ── Banking pass (Supplier only, for now) ───────────────
+                    # MUST run before this file gets archived below, otherwise
+                    # a workbook that passes the Suppliers sheet gets archived
+                    # immediately and its Banking sheet is never touched.
+                    if hasattr(mod, "process_banking_file"):
+                        print(f"[main.py] running process_banking_file for {filename}...")
+                        bank_ok, bank_fail = mod.process_banking_file(file_path, tm)
+                        print(f"[main.py] process_banking_file done for {filename}: "
+                              f"ok={bank_ok} fail={bank_fail}")
+                        ok   += bank_ok
+                        fail += bank_fail
+
                     result_holder.extend([ok, fail])
                 except Exception as exc:
+                    print(f"[main.py] EXCEPTION while processing {filename}: {exc}")
+                    traceback.print_exc()
                     result_holder.extend([0, -1])
                     result_holder.append(str(exc))
 

@@ -1,10 +1,10 @@
 {
   "qad": {
-    "base_url": "https://cat5-devl.adaptive.qad.com/clouderp",
+    "base_url": "https://qad.test.piiem.orcait.net/clouderp/",
     "auth": {
-      "client_id": "a532e2eb10da3da6ed1466bf506326c7",
-      "username": "demo",
-      "password": "qad",
+      "client_id": "d37a03bd26d01f88f1140b8cb093804e",
+      "username": "mfg@orcait.net",
+      "password": "",
       "grant_type": "password"
     }
   },

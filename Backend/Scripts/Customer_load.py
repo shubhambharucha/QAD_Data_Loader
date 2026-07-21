@@ -147,9 +147,9 @@ def build_payload(row: dict) -> dict:
                 # ── Business Relation ─────────────────────────────────────────
                 "businessRelationCode":                     val("Business Relation"),
                 "businessRelationID":                       0,
-                "businessRelationName":                     "",
-                "businessRelationName2":                    "",
-                "businessRelationName3":                    "",
+                "businessRelationName":                     val("Name"),
+                "businessRelationName2":                    val("Second Name"),
+                "businessRelationName3":                    val("Third Name"),
                 "businessRelationConcurrencyHash":          "",
                 "isBusinessRelationActive":                 True,
                 "isBusinessRelationFieldsEnabled":          True,
@@ -163,10 +163,11 @@ def build_payload(row: dict) -> dict:
                 "addressName":                              val("Name"),
                 "addressSearchName":                        val("Search Name"),
                 "addressTypeCode":                          val("Address Type"),
+
                 "addressConcurrencyHash":                   "",
                 "street1":                                  val("Address 1"),
                 "street2":                                  val("Address 2"),
-                "street3":                                  "",
+                "street3":                                  val("Address 3"),
                 "city":                                     val("City"),
                 "cityCode":                                 "",
                 "zipCode":                                  val("Postal Code"),
@@ -234,7 +235,7 @@ def build_payload(row: dict) -> dict:
                 "salesAccountGLProfileCode":                val("Sales Account GL Profile"),
                 "salesAccountGLProfileDesc":                "",
                 "salesAccountGLProfileID":                  0,
-                "deductionControlGLProfileCode":            "",
+                "deductionControlGLProfileCode":            val("Deduction Control GL"),
                 "deductionControlGLProfileDesc":            "",
                 "deductionControlGLProfileID":              0,
                 "financeChargeGLProfileCode":               "",
@@ -379,7 +380,7 @@ def build_payload(row: dict) -> dict:
                 "customCombo0":  "", "customCombo1":  "", "customCombo2":  "",
                 "customCombo3":  "", "customCombo4":  "", "customCombo5":  "",
                 "customCombo6":  "", "customCombo7":  "", "customCombo8":  "",
-                "customCombo9":  "", "customCombo10": "", "customCombo11": "",
+                "customCombo9":  "", "customCombo10": val("Business Type"), "customCombo11": "",
                 "customCombo12": "", "customCombo13": "", "customCombo14": "",
                 "customDecimal0": 0, "customDecimal1": 0, "customDecimal2": 0,
                 "customDecimal3": 0, "customDecimal4": 0,
@@ -763,19 +764,25 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             payload  = existing["data"]
             customer = payload["customerV2s"][0]
 
-            customer["businessRelationCode"]           = str(row_data.get("Business Relation", "")).strip()
-            customer["isActive"]                       = str(row_data.get("Active", "")).strip().lower() == "yes"
-            customer["currencyCode"]                   = str(row_data.get("Currency", "")).strip()
-            customer["creditTermsCode"]                = str(row_data.get("Credit Terms", "")).strip()
-            customer["creditRatingCode"]               = str(row_data.get("Credit Rating")).strip()
-            customer["invoiceStatusCode"]              = str(row_data.get("Invoice Status", "")).strip()
-            customer["taxZone"]                        = str(row_data.get("Tax Zone", "")).strip()
-            customer["telephone"]                      = str(row_data.get("Telephone")).strip()
-            customer["EMail"]                            = str(row_data.get("Email")).strip()
-            customer["invoiceControlGLProfileCode"]    = str(row_data.get("Invoice Control GL Profile", "")).strip()
-            customer["creditNoteControlGLProfileCode"] = str(row_data.get("Credit Note Control GL Profile", "")).strip()
-            customer["prePaymentControlGLProfileCode"] = str(row_data.get("Prepayment Control GL Profile", "")).strip()
-            customer["salesAccountGLProfileCode"]      = str(row_data.get("Sales Account GL Profile", "")).strip()
+            def _patch_if_present(target_dict, key, raw_value, transform=lambda v: v):
+
+                if raw_value is not None and str(raw_value).strip() != "":
+                    target_dict[key] = transform(str(raw_value).strip())
+
+            _patch_if_present(customer, "businessRelationCode",           row_data.get("Business Relation"))
+            _patch_if_present(customer, "federalTax",                     row_data.get("Federal Tax"))
+            _patch_if_present(customer, "isActive",                       row_data.get("Active"),   lambda v: v.lower() == "yes")
+            _patch_if_present(customer, "currencyCode",                   row_data.get("Currency"))
+            _patch_if_present(customer, "creditTermsCode",                row_data.get("Credit Terms"))
+            _patch_if_present(customer, "creditRatingCode",                row_data.get("Credit Rating"))
+            _patch_if_present(customer, "invoiceStatusCode",               row_data.get("Invoice Status"))
+            _patch_if_present(customer, "taxZone",                         row_data.get("Tax Zone"))
+            _patch_if_present(customer, "telephone",                       row_data.get("Telephone"))
+            _patch_if_present(customer, "EMail",                            row_data.get("Email"))
+            _patch_if_present(customer, "invoiceControlGLProfileCode",     row_data.get("Invoice Control GL Profile"))
+            _patch_if_present(customer, "creditNoteControlGLProfileCode",  row_data.get("Credit Note Control GL Profile"))
+            _patch_if_present(customer, "prePaymentControlGLProfileCode",  row_data.get("Prepayment Control GL Profile"))
+            _patch_if_present(customer, "salesAccountGLProfileCode",       row_data.get("Sales Account GL Profile"))
 
         else:
             payload = build_payload(row_data)
