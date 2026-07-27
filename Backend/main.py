@@ -3,9 +3,11 @@ main.py  —  QAD Data Loader FastAPI Backend
 ============================================
 Endpoints
 ---------
-POST /api/validate        { "entities": ["Supplier", "Customer", ...] }
-POST /api/load             { "entities": ["Supplier", "Customer", ...] }
-POST /api/upload-json     { "entity": "Supplier_Item", "data": [...rows...], "filename": "optional" }
+POST /api/validate         { "entities": ["Supplier", "Customer", ...] }
+POST /api/load              { "entities": ["Supplier", "Customer", ...] }
+POST /api/fetch-price-list  { "filters": [...], "filename": "..." }
+POST /api/blank-template     { "entities": ["Supplier", "Customer", "PriceList"] }
+GET  /api/blank-template/entities
 GET  /api/config
 POST /api/save-config
 POST /api/test-connection
@@ -34,28 +36,29 @@ SSE event types emitted
 import asyncio
 import importlib
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
 import sys
 import traceback
+import zipfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
-import pandas as pd
-from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 
 # ── main.py lives inside Backend/ ────────────────────────────────────────────
-BACKEND_DIR      = os.path.abspath(os.path.dirname(__file__))         # .../QAD_data_loader/Backend
-ROOT_DIR         = os.path.abspath(os.path.join(BACKEND_DIR, ".."))  # .../QAD_data_loader
-SCRIPTS_DIR      = os.path.join(BACKEND_DIR, "Scripts")
-DATA_DIR         = os.path.join(ROOT_DIR, "Data")
-ENTITY_CONFIGS_DIR = os.path.join(BACKEND_DIR, "entity_configs")      # NEW
+BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))         # .../QAD_data_loader/Backend
+ROOT_DIR    = os.path.abspath(os.path.join(BACKEND_DIR, ".."))  # .../QAD_data_loader
+SCRIPTS_DIR = os.path.join(BACKEND_DIR, "Scripts")
+DATA_DIR    = os.path.join(ROOT_DIR, "Data")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, BACKEND_DIR)
@@ -129,6 +132,12 @@ ENTITY_MAP: dict[str, dict] = {
         "folder_key":      "supplier_price_list",
         "archive_folder":  "SupplierPriceList",
     },
+    "PriceList": {
+        "validate_script": "validate_price_list",
+        "load_script":     "price_list_load",
+        "folder_key":      "price_list",
+        "archive_folder":  "Price_List",
+    },
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -142,6 +151,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -152,24 +162,21 @@ class OperationRequest(BaseModel):
     entities: list[str]
 
 
-class UploadJsonRequest(BaseModel):
-    entity:   str
-    data:     list[dict[str, Any]]
-    filename: str | None = None   # optional; auto-generated if omitted
+class FetchFilterItem(BaseModel):
+    field:       str            # e.g. "price_list", "start_date", "amount_type"
+    operator:    str            # "equals" | "starts with" | "ends with" | "contains" |
+                                 # "range" | "greater than" | "less than"
+    value_from:  str | None = None
+    value_to:    str | None = None   # only meaningful when operator == "range"
 
-    @field_validator("entity")
-    @classmethod
-    def entity_must_exist(cls, v: str) -> str:
-        if v not in ENTITY_MAP:
-            raise ValueError(f"Unknown entity '{v}'. Valid entities: {list(ENTITY_MAP)}")
-        return v
 
-    @field_validator("data")
-    @classmethod
-    def data_must_not_be_empty(cls, v: list) -> list:
-        if not v:
-            raise ValueError("'data' array must not be empty")
-        return v
+class FetchPriceListRequest(BaseModel):
+    filters:  list[FetchFilterItem] = []
+    filename: str
+
+
+class BlankTemplateRequest(BaseModel):
+    entities: list[str]
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HELPERS  —  SSE
@@ -205,6 +212,17 @@ def resolve_archive(entity_id: str) -> str:
     return path
 
 
+def resolve_downloads_folder() -> str:
+    """
+    Return the current user's Downloads folder, creating it if missing.
+    Works cross-platform (Windows/macOS/Linux) since it's just ~/Downloads
+    on all three.
+    """
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    return str(downloads)
+
+
 def list_xlsx(folder: str) -> list[str]:
     """Return sorted list of .xlsx filenames (skip temp files)."""
     if not os.path.isdir(folder):
@@ -238,6 +256,17 @@ def _safe_filename(folder: str, original: str) -> str:
         candidate = f"{stem} ({counter}){ext}"
         counter  += 1
     return candidate
+
+
+def _generate_filename(prefix: str, custom: str | None) -> str:
+    """
+    Use caller-supplied name if provided (ensure .xlsx extension).
+    Otherwise auto-generate: PriceList_20260616_143022.xlsx
+    """
+    if custom:
+        return custom if custom.endswith(".xlsx") else f"{custom}.xlsx"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{ts}.xlsx"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HELPERS  —  FILE RENAME / ARCHIVE
@@ -300,62 +329,18 @@ def archive_file(folder: str, filename: str, archive_dir: str) -> str:
     return dest_path
 
 # ═════════════════════════════════════════════════════════════════════════════
-# HELPERS  —  ENTITY CONFIG LOADER  (entity_configs/<Entity>.py)
+# BLANK TEMPLATE GENERATION  —  Supplier / Customer / PriceList
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _load_entity_config(entity: str) -> dict:
-    """
-    Dynamically load entity_configs/<Entity>.py and return its contents as a dict:
-      {
-        "aliases":  COLUMN_ALIASES  (dict[str, str]),
-        "defaults": DEFAULTS        (dict[str, Any]),
-        "optional": OPTIONAL_FIELDS (list[str]),
-      }
-    Returns empty structures if no config file exists for this entity.
-    """
-    config_path = os.path.join(ENTITY_CONFIGS_DIR, f"{entity}.py")
-    if not os.path.exists(config_path):
-        return {"aliases": {}, "defaults": {}, "optional": []}
-
-    spec   = importlib.util.spec_from_file_location(entity, config_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    return {
-        "aliases":  getattr(module, "COLUMN_ALIASES",  {}),
-        "defaults": getattr(module, "DEFAULTS",        {}),
-        "optional": getattr(module, "OPTIONAL_FIELDS", []),
-    }
-
-
-def _apply_entity_config(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Apply aliases, defaults, and optional-field filling to a DataFrame.
-    Returns (transformed_df, list_of_changes_for_logging).
-    """
-    log = []
-
-    # 1. Rename KNIME columns → internal names
-    aliases = config["aliases"]
-    renames = {col: aliases[col] for col in df.columns if col in aliases}
-    if renames:
-        df = df.rename(columns=renames)
-        log += [f"alias: '{k}' → '{v}'" for k, v in renames.items()]
-
-    # 2. Inject default values (e.g. Domain Code = "10USA")
-    for col, value in config["defaults"].items():
-        df[col] = value
-        log.append(f"default injected: '{col}' = '{value}'")
-
-    # 3. Fill optional fields with "" if missing or NaN
-    for col in config["optional"]:
-        if col not in df.columns:
-            df[col] = ""
-            log.append(f"optional added as empty: '{col}'")
-        else:
-            df[col] = df[col].fillna("").astype(str).replace("nan", "")
-
-    return df, log
+#
+# All of the actual template-building logic (section spans, column headers,
+# styling) lives in Scripts/blank_template.py, loaded dynamically below the
+# same way every validate_<entity>.py / <entity>_load.py script is. Adding a
+# new entity's template later only ever means editing that one file.
+#
+# Scripts/blank_template.py contract:
+#   TEMPLATE_SPECS               -> dict of entity_id -> spec (source of truth)
+#   supported_entities() -> list[str]
+#   build(entity_id: str) -> io.BytesIO   (in-memory workbook, no disk writes)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # VALIDATE STREAM GENERATOR
@@ -606,76 +591,161 @@ async def load_stream(entities: list[str]) -> AsyncGenerator[str, None]:
     yield sse({"type": "done", "message": "Load complete"})
 
 # ═════════════════════════════════════════════════════════════════════════════
-# UPLOAD-JSON  —  receive JSON from KNIME, convert to .xlsx, save to entity folder
+# FETCH  —  Price List extraction from QAD (Scripts/fetch_price_lists.py)
 # ═════════════════════════════════════════════════════════════════════════════
+#
+# Contract for Scripts/fetch_price_lists.py:
+#
+#   def fetch(filters: list[dict], output_path: str) -> dict:
+#       ...
+#       return {"ok": True, "rows": 123, "message": "Extraction successful"}
+#
+# If the script also defines a TokenManager class (same pattern as the other
+# load scripts), main.py will instantiate/reuse it and call instead:
+#
+#   def fetch(filters: list[dict], output_path: str, tm) -> dict:
+#       ...
+#
+# `filters` is a list of dicts shaped like:
+#   {"field": "price_list", "operator": "equals", "value_from": "STD", "value_to": None}
+#
+# Downloads-only: no directory is ever accepted from the client. The output
+# path is always <user's Downloads>/<filename>.xlsx, resolved server-side.
+# This is a plain request/response call (no SSE) — the frontend shows a
+# single success/failure summary once the extraction finishes.
 
-def _generate_filename(entity: str, custom: str | None) -> str:
-    """
-    Use caller-supplied name if provided (ensure .xlsx extension).
-    Otherwise auto-generate: Supplier_Item_20250616_143022.xlsx
-    """
-    if custom:
-        return custom if custom.endswith(".xlsx") else f"{custom}.xlsx"
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{entity}_{ts}.xlsx"
+@app.post("/api/fetch-price-list")
+async def api_fetch_price_list(req: FetchPriceListRequest):
+    filename = _generate_filename("PriceList", req.filename.strip())
 
+    out_dir = resolve_downloads_folder()
+    output_path = os.path.join(out_dir, filename)
 
-@app.post("/api/upload-json")
-async def api_upload_json(req: UploadJsonRequest = Body(...)):
-    """
-    Accept JSON rows from KNIME, apply entity config transforms, write to .xlsx.
+    filters_payload = [f.model_dump() for f in req.filters]
 
-    Flow:
-      1. Load entity_configs/<Entity>.py  → aliases, defaults, optional fields
-      2. JSON → DataFrame
-      3. Rename columns via COLUMN_ALIASES
-      4. Inject DEFAULTS (e.g. Domain Code)
-      5. Fill OPTIONAL_FIELDS with "" if missing
-      6. Write .xlsx to Data/<Entity>/
-      7. Return summary (rows, columns, transforms applied)
+    loop = asyncio.get_event_loop()
 
-    KNIME then calls /api/validate and /api/load as normal.
-    """
-    # ── Resolve destination folder ────────────────────────────────────────
-    try:
-        folder = resolve_folder(req.entity)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    def _run_fetch() -> dict:
+        try:
+            mod = load_module("fetch_price_lists")
+        except Exception as e:
+            return {"ok": False, "message": f"Cannot load fetch_price_lists: {e}"}
 
-    os.makedirs(folder, exist_ok=True)
+        try:
+            if hasattr(mod, "TokenManager"):
+                if hasattr(mod, "_tm"):
+                    tm = mod._tm
+                else:
+                    tm = mod.TokenManager()
+                    mod._tm = tm
+                result = mod.fetch(filters_payload, output_path, tm)
+            else:
+                result = mod.fetch(filters_payload, output_path)
+            return result
+        except Exception as exc:
+            traceback.print_exc()
+            return {"ok": False, "message": str(exc)}
 
-    # ── Load entity config ────────────────────────────────────────────────
-    entity_config = _load_entity_config(req.entity)
-
-    # ── JSON → DataFrame ──────────────────────────────────────────────────
-    df = pd.DataFrame(req.data)
-
-    # ── Apply aliases / defaults / optional fills ─────────────────────────
-    df, transform_log = _apply_entity_config(df, entity_config)
-
-    # ── Collision-safe filename ───────────────────────────────────────────
-    filename  = _generate_filename(req.entity, req.filename)
-    filename  = _safe_filename(folder, filename)
-    dest_path = os.path.join(folder, filename)
-
-    # ── Write Excel (run in executor so event loop isn't blocked) ─────────
-    try:
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: df.to_excel(dest_path, index=False, engine="openpyxl"),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write Excel: {e}")
+    result = await loop.run_in_executor(None, _run_fetch)
+    ok     = bool(result.get("ok"))
 
     return {
-        "ok":              True,
-        "entity":          req.entity,
-        "filename":        filename,
-        "path":            dest_path,
-        "rows":            len(df),
-        "columns":         list(df.columns),
-        "transforms":      transform_log,
+        "ok":       ok,
+        "message":  result.get("message") or ("Extraction successful" if ok else "Extraction failed"),
+        "rows":     result.get("rows", 0),
+        "filename": filename,
+        "path":     output_path,
     }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BLANK TEMPLATE  —  headers-only workbook(s), streamed straight to the browser
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Deliberately NOT written to any server-side folder (unlike fetch above).
+# The file is built in memory and returned as a normal HTTP attachment, so it
+# is the *browser* — not this server — that decides where it lands on disk.
+# That makes it work the same way regardless of what machine the backend is
+# running on, or what OS the person using the tool is on.
+#
+#   - 1 entity selected  → returns that entity's .xlsx directly.
+#   - 2+ entities selected → returns a .zip containing one .xlsx per entity.
+
+@app.get("/api/blank-template/entities")
+def api_blank_template_entities():
+    """
+    Which entities Scripts/blank_template.py currently knows how to build a
+    template for. index.html calls this to decide which selections enable
+    the Blank Template button, instead of hardcoding the list on the frontend.
+    """
+    try:
+        mod = load_module("blank_template")
+        return {"ok": True, "entities": mod.supported_entities()}
+    except Exception as e:
+        return {"ok": False, "entities": [], "error": str(e)}
+
+
+@app.post("/api/blank-template")
+async def api_blank_template(req: BlankTemplateRequest):
+    entities = list(dict.fromkeys(req.entities))  # de-dupe, keep order
+
+    if not entities:
+        raise HTTPException(status_code=400, detail="No entities selected.")
+
+    try:
+        mod = load_module("blank_template")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cannot load blank_template: {e}")
+
+    supported   = set(mod.supported_entities())
+    unsupported = [e for e in entities if e not in supported]
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No blank template available for: {', '.join(unsupported)}. "
+                f"Currently supported: {', '.join(sorted(supported))}."
+            ),
+        )
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        buffers = {
+            entity_id: await loop.run_in_executor(None, mod.build, entity_id)
+            for entity_id in entities
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Template generation failed: {exc}")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def _prefix(entity_id: str) -> str:
+        return mod.TEMPLATE_SPECS.get(entity_id, {}).get("file_prefix", entity_id)
+
+    if len(entities) == 1:
+        entity_id = entities[0]
+        filename  = f"{_prefix(entity_id)}_Blank_Template_{ts}.xlsx"
+        buf       = buffers[entity_id]
+
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for entity_id in entities:
+            zf.writestr(f"{_prefix(entity_id)}_Blank_Template.xlsx", buffers[entity_id].getvalue())
+    zip_buf.seek(0)
+
+    zip_filename = f"Blank_Templates_{ts}.zip"
+    return StreamingResponse(
+        zip_buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'},
+    )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONFIG  —  read / write / reload

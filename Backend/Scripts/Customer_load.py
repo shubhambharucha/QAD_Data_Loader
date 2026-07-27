@@ -9,18 +9,33 @@ Behaviour
 - Fetches one OAuth token per run; refreshes only on 401
 - Skips rows with Status = DONE (for Create operations only)
 - Lightweight mandatory-field check before any API call
-- Success check: submitResult.success == True
-- Error messages extracted from submitResult.errors[].message
+- Success/error extraction normalized via qad_response_utils.normalize_response,
+  which handles both response envelopes QAD has been observed sending:
+    1. submitResult-wrapped (normal validation failures)
+    2. bare top-level errors[] (gateway/permission failures, e.g. 403)
+- Error DETAIL extracted from errors[] (fieldName, message, fieldValue, code)
+  and translated to Excel column names via QAD_FIELD_TO_COLUMN /
+  DOMAIN_FIELD_TO_COLUMN below, so the exact bad cell gets highlighted —
+  not just Customer/Status/Error.
 - On success  → clear all red fills, clear Error, set Status = DONE
-- On failure  → red-fill first col + bad cols + Error col, log message, set Status = ERROR
+- On failure  → red-fill first col + every bad col QAD identified + Error col,
+  log the combined message, set Status = ERROR
 - Processes every row regardless of individual failures
 - Returns (ok_count, fail_count)
+
+Generic Excel formatting (fills, mark DONE/ERROR, translating QAD's
+field-level errors into highlighted columns) lives in excel_format_utils.py.
+Generic response-envelope normalization lives in qad_response_utils.py.
+Both are shared by every <Entity>_load.py loader script. This file only
+owns entity-specific knowledge: which QAD field maps to which Excel
+column, payload building, and API communication.
 
 CREATE flow (Data Operation = C):
   1. POST to customerV2s  → creates customer
   2. GET  mfgCustomers    → fetch auto-created domain record
   3. PATCH + POST         → update siteCode + daybookSetCode
-  If step 3 fails → row marked ERROR with "Customer created but domain settings failed: ..."
+  If step 3 fails → row marked ERROR with domain-settings errors highlighted
+  on the Site Code / Daybook Set / Domain columns where QAD identifies them.
 
 UPDATE flow (Data Operation = U):
   1. GET  customerV2s     → fetch existing record
@@ -35,17 +50,25 @@ import time
 import json
 import requests
 import openpyxl
-from openpyxl.styles import PatternFill
 from datetime import datetime
 
-# ── Path / config ─────────────────────────────────────────────────────────
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, ROOT_DIR)
-from config import CONFIG
+# ── Progress callback (used by main.py SSE streaming) ──────────────────
 
-# ── Fill constants ────────────────────────────────────────────────────────
-RED_FILL   = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-CLEAR_FILL = PatternFill(fill_type=None)
+_progress_callback = None
+
+def set_progress_callback(callback):
+    global _progress_callback
+    _progress_callback = callback
+
+
+# ── Path / config ─────────────────────────────────────────────────────────
+ROOT_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, SCRIPTS_DIR)
+from config import CONFIG
+from excel_format_utils import RED_FILL, CLEAR_FILL, mark_done, mark_error, resolve_qad_errors
+from qad_response_utils import normalize_response
 
 # ── Mandatory columns (customer) ──────────────────────────────────────────
 MANDATORY_COLUMNS = [
@@ -68,6 +91,96 @@ MANDATORY_DOMAIN_COLUMNS = [
     "Site Code",
     "Daybook Set",
 ]
+
+# ── QAD API fieldName → Excel column name ─────────────────────────────────
+# Extend this map whenever a new QAD fieldName is observed in errors[]
+# that should highlight a specific Excel cell. Anything NOT in this map still
+# shows up in the Error message text — it just won't get its own highlighted
+# cell (falls back to today's Customer/Status/Error-only highlighting).
+#
+# NOTE: QAD's key is "fieldName" (not "field") — resolve_qad_errors() reads
+# fieldName. Previously this was misread and silently dropped every
+# column-level highlight; fixed in excel_format_utils.py.
+QAD_FIELD_TO_COLUMN = {
+    "customerCode":                     "Customer",
+    "sharedSetCode":                     "Shared Set",
+    "businessRelationCode":              "Business Relation",
+    "isActive":                          "Active",
+    "currencyCode":                      "Currency",
+    "customerCurrencyCode":              "Currency",
+    "CreditTermsCode":                   "Credit Terms",
+    "InvoiceStatusCode":                 "Invoice Status",
+    "InvoiceControlGLProfileCode":       "Invoice Control GL Profile",
+    "CreditNoteControlGLProfileCode":    "Credit Note Control GL Profile",
+    "PrePaymentControlGLProfileCode":    "Prepayment Control GL Profile",
+    "SalesAccountGLProfileCode":         "Sales Account GL Profile",
+    "creditRatingCode":                  "Credit Rating",
+    "TaxZone":                           "Tax Zone",
+    "EMail":                             "Email",
+    "telephone":                         "Telephone",
+    "AddressSearchName":                 "Search Name",   # confirmed via QAD error log 2026-07-22
+
+    # ── Below: audited against every val()-sourced field in build_payload().
+    # Key names follow the same JSON-field convention as the confirmed
+    # entries above. NOT yet individually confirmed against a live QAD
+    # error (only "AddressSearchName" and the entries above it have been
+    # seen for real) — QAD is known to sometimes use different casing
+    # (addressSearchName in payload vs "AddressSearchName" in the error),
+    # so if a highlight doesn't fire for one of these, check the real
+    # fieldName in the debug print and correct the key here.
+    "CustomerTypeCode":                  "Customer Type",   # confirmed via QAD error log 2026-07-22
+    "businessRelationName":              "Name",
+    "businessRelationName2":             "Second Name",
+    "businessRelationName3":             "Third Name",
+    "addressTypeCode":                   "Address Type",
+    "street1":                           "Address 1",
+    "street2":                           "Address 2",
+    "street3":                           "Address 3",
+    "city":                              "City",
+    "zipCode":                           "Postal Code",
+    "stateCode":                         "State",
+    "stateTax":                          "State Tax",
+    "countryCode":                       "Country",
+    "languageCode":                      "Language",
+    "deductionControlGLProfileCode":     "Deduction Control GL",
+    "taxClass":                          "Tax Class",
+    "taxUsage":                          "Tax Usage",
+    "isTaxable":                         "Taxable(Yes/No)",
+    "isTaxInCity":                       "Tax in City(Yes/No)",
+    "isTaxIncluded":                     "Tax Included(Yes/No)",
+    "isTaxReport":                       "Tax Report",
+    "federalTax":                        "Federal Tax",
+    "miscellaneousTax1":                 "Miscellaneous Tax 1",
+    "miscellaneousTax2":                 "Miscellaneous Tax 2",
+    "miscellaneousTax3":                 "Miscellaneous Tax 3",
+    "fixedCreditLimit":                  "Fixed Credit Limit",
+    "isFixedCreditLimit":                "Apply Fixed Ceiling",
+    "isTurnOverCreditLimit":             "Apply % of Turnover",
+    "isMaxDaysOverdueCreditLimit":       "Apply Maximum Days Overdue",
+    "maxDaysCreditLimit":                "Maximum Days Overdue",
+    "turnoverCreditLimitPercent":        "Percentage of Turnover",
+    "isLockedCreditLimit":               "Credit Hold",
+    "warningCreditLimitPercent":         "Warning Ceiling %",
+    "creditAgencyReference":             "Credit Agency Ref",
+    "IsOverruleAllowedSOCreditLimit":    "Overrule Allowed SO(Yes/No)",
+    "IsCheckBeforeSOCreditLimit":        "Calculate before Order Entry(Yes/No)",
+    "IsCheckAfterSOCreditLimit":         "Calculate after Order Entry(Yes/No)",
+    "IsCheckBeforeInvoiceCreditLimit":   "Calculate before Invoice(Yes/No)",
+    "IsCheckAfterInvoiceCreditLimit":    "Calculate after Invoice Entry(Yes/No)",
+    "IsOverAllowedInvoiceCreditLimit":   "Overrule Allowed Invoice(Yes/No)",
+    "IsIncludeDraftCreditLimit":         "Include Drafts(Yes/No)",
+    "isIncludeOpenItemsCreditLimit":     "Include Open Items(Yes/No)",
+    "isIncludeSOCheckCreditLimit":       "Include Sales Orders(Yes/No)",
+    "customerIsInclDeduction":           "Include Deductions",
+    "customCombo10":                     "Business Type",
+}
+
+# ── QAD domain-settings (mfgCustomers) fieldName → Excel column name ─────
+DOMAIN_FIELD_TO_COLUMN = {
+    "siteCode":       "Site Code",
+    "daybookSetCode": "Daybook Set",
+    "domainContext":  "Domain",
+}
 
 
 # =============================================================================
@@ -123,9 +236,9 @@ def build_payload(row: dict) -> dict:
         if not v:
             return ""
         try:
-            #adjust input format based on source (excel date format)
-            return datetime.strtime(v, "%d-%m-%Y").strftime("%Y-%m-%d")
-        except:
+            # adjust input format based on source (excel date format)
+            return datetime.strptime(v, "%d-%m-%Y").strftime("%Y-%m-%d")
+        except Exception:
             return ""
 
     customer_code = val("Customer")
@@ -286,27 +399,27 @@ def build_payload(row: dict) -> dict:
                 "vatDeliveryType":                          "",
                 "vatPercentageLevel":                       "",
                 "nameControl":                              "",
-                "EORINumber":                               "",
+                "EORINumber":                                "",
 
                 # ── Credit Limit ──────────────────────────────────────────────
-                "fixedCreditLimit":                         float_val("Fixed Credit Limit"), #done
+                "fixedCreditLimit":                         float_val("Fixed Credit Limit"),
                 "highCredit":                               0,
-                "isFixedCreditLimit":                       bool_val("Apply Fixed Ceiling"), #done
-                "isTurnOverCreditLimit":                    bool_val("Apply % of Turnover"), #done
-                "isMaxDaysOverdueCreditLimit":              bool_val("Apply Maximum Days Overdue"), #done 
-                "maxDaysCreditLimit":                       int_val("Maximum Days Overdue"), #done
-                "turnoverCreditLimitPercent":               float_val("Percentage of Turnover"), #done
-                "isLockedCreditLimit":                      bool_val("Credit Hold"), #done
+                "isFixedCreditLimit":                       bool_val("Apply Fixed Ceiling"),
+                "isTurnOverCreditLimit":                    bool_val("Apply % of Turnover"),
+                "isMaxDaysOverdueCreditLimit":              bool_val("Apply Maximum Days Overdue"),
+                "maxDaysCreditLimit":                       int_val("Maximum Days Overdue"),
+                "turnoverCreditLimitPercent":               float_val("Percentage of Turnover"),
+                "isLockedCreditLimit":                      bool_val("Credit Hold"),
                 "isToBeLockedCreditLimit":                  False,
-                "warningCreditLimitPercent":                float_val("Warning Ceiling %"), #done
-                "creditAgencyReference":                    val("Credit Agency Ref"), #done
-                "creditRatingCode":                         val("Credit Rating"),#done
-                "creditRatingID":                           0,
+                "warningCreditLimitPercent":                float_val("Warning Ceiling %"),
+                "creditAgencyReference":                    val("Credit Agency Ref"),
+                "creditRatingCode":                          val("Credit Rating"),
+                "creditRatingID":                            0,
 
                 # ── Credit Check ──────────────────────────────────────────────
                 "isOverruleAllowedSOCreditLimit":           bool_val("Overrule Allowed SO(Yes/No)"),
-                "isCheckBeforeSOCreditLimit":               bool_val("Calculate before Order Entry(Yes/No)"),
-                "isCheckAfterSOCreditLimit":                bool_val("Calculate after Order Entry(Yes/No)"),
+                "isCheckBeforeSOCreditLimit":                bool_val("Calculate before Order Entry(Yes/No)"),
+                "isCheckAfterSOCreditLimit":                 bool_val("Calculate after Order Entry(Yes/No)"),
                 "isCheckBeforeInvoiceCreditLimit":          bool_val("Calculate before Invoice(Yes/No)"),
                 "isCheckAfterInvoiceCreditLimit":           bool_val("Calculate after Invoice Entry(Yes/No)"),
                 "isOverAllowedInvoiceCreditLimit":          bool_val("Overrule Allowed Invoice(Yes/No)"),
@@ -405,10 +518,17 @@ class _TokenExpired(Exception):
     pass
 
 
-def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[bool, str]:
+def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[bool, list]:
     """
     POST customer payload to QAD.
-    Returns (success, error_msg). Raises _TokenExpired on 401.
+
+    Returns (success, errors). errors is normalized via
+    qad_response_utils.normalize_response(), so callers get a uniform
+    list of dicts (fieldName/message/...) regardless of whether QAD sent
+    back a submitResult-wrapped response or a bare top-level errors[]
+    (e.g. 403 gateway/permission failures).
+
+    Raises _TokenExpired on 401.
     """
     customer      = payload["customerV2s"][0]
     shared_set    = customer.get("sharedSetCode", "")
@@ -439,43 +559,29 @@ def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[b
     if resp.status_code == 401:
         raise _TokenExpired()
 
-    resp_json = resp.json()
+    # ── TEMP DEBUG BLOCK — remove once field mapping is confirmed ─────────
+    print("\n" + "="*70)
+    print(f"DEBUG post_customer | HTTP {resp.status_code} | customer={customer_code}")
+    print("="*70)
+    print("RAW response text:")
+    print(resp.text)
+    print("-"*70)
+    try:
+        _debug_json = resp.json()
+        print("Parsed JSON top-level keys:", list(_debug_json.keys()))
+        print("Full parsed JSON:")
+        print(json.dumps(_debug_json, indent=2))
+    except Exception as _debug_exc:
+        print(f"Could not parse response as JSON: {_debug_exc}")
+    print("="*70 + "\n")
+    # ── END TEMP DEBUG BLOCK ───────────────────────────────────────────────
 
+    try:
+        resp_json = resp.json()
+    except Exception:
+        resp_json = {}
 
-    # ── DEBUG BLOCK (remove before production) ────────────────────────────
-    #print("\n" + "="*60)
-    #print("DEBUG: POST customerV2s response")
-    #print("="*60)
-    #print(f"  HTTP Status   : {resp.status_code}")
-    #print(f"  Customer      : {customer_code}")
-    #print(f"  Is Create     : {is_create}")
-    #print(f"  Submit Success: {resp_json.get('submitResult', {}).get('success')}")
-    #errors = resp_json.get("submitResult", {}).get("errors", [])
-    #print(f"  Errors ({len(errors)}):")
-    #for e in errors:
-    #    print(f"    - field   : {e.get('field', 'N/A')}")
-    #    print(f"      message : {e.get('message', 'N/A')}")
-    #   print(f"      value   : {e.get('value', 'N/A')}")
-    #    print(f"      code    : {e.get('code', 'N/A')}")
-    #print("\n  Full submitResult:")
-    #print(json.dumps(resp_json.get("submitResult", {}), indent=4))
-    #print("="*60 + "\n")
-    # ── END DEBUG BLOCK ───────────────────────────────────────────────────
-
-
-    submit = resp_json.get("submitResult", {})
-
-    if submit.get("success") is True:
-        return True, ""
-
-    errors    = submit.get("errors", [])
-    error_msg = "; ".join(
-        e.get("message", "").strip()
-        for e in errors
-        if e.get("message", "").strip()
-    ) or f"HTTP {resp.status_code} — submitResult.success was not True"
-
-    return False, error_msg
+    return normalize_response(resp_json, resp.status_code)
 
 
 def get_customer(shared_set: str, customer_code: str, token: str) -> dict:
@@ -520,8 +626,13 @@ def get_mfg_customer(domain: str, customer_code: str, token: str) -> dict:
     return resp.json()
 
 
-def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str) -> tuple[bool, str]:
-    """POST updated domain settings back to QAD."""
+def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str) -> tuple[bool, list]:
+    """
+    POST updated domain settings back to QAD.
+
+    Returns (success, errors) — same normalized shape as post_customer(),
+    via qad_response_utils.normalize_response().
+    """
     url = (
         f"{CONFIG['qad']['base_url']}/api/erp/mfgCustomers"
         f"?domainContext={domain}&customerCode={customer_code}"
@@ -541,7 +652,10 @@ def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str
     if resp.status_code == 401:
         raise _TokenExpired()
 
-    resp_json = resp.json()
+    try:
+        resp_json = resp.json()
+    except Exception:
+        resp_json = {}
 
     # ── DEBUG BLOCK (remove before production) ────────────────────────────
     print("\n" + "="*60)
@@ -550,32 +664,12 @@ def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str
     print(f"  HTTP Status   : {resp.status_code}")
     print(f"  Customer      : {customer_code}")
     print(f"  Domain        : {domain}")
-    print(f"  Submit Success: {resp_json.get('submitResult', {}).get('success')}")
-    errors = resp_json.get("submitResult", {}).get("errors", [])
-    print(f"  Errors ({len(errors)}):")
-    for e in errors:
-        print(f"    - field   : {e.get('field', 'N/A')}")
-        print(f"      message : {e.get('message', 'N/A')}")
-        print(f"      value   : {e.get('value', 'N/A')}")
-        print(f"      code    : {e.get('code', 'N/A')}")
-    print("\n  Full submitResult:")
-    print(json.dumps(resp_json.get("submitResult", {}), indent=4))
+    print("  Full response:")
+    print(json.dumps(resp_json, indent=4))
     print("="*60 + "\n")
     # ── END DEBUG BLOCK ───────────────────────────────────────────────────
 
-    submit = resp_json.get("submitResult", {})
-
-    if submit.get("success") is True:
-        return True, ""
-
-    errors    = submit.get("errors", [])
-    error_msg = "; ".join(
-        e.get("message", "").strip()
-        for e in errors
-        if e.get("message", "").strip()
-    ) or f"HTTP {resp.status_code} — submitResult.success was not True"
-
-    return False, error_msg
+    return normalize_response(resp_json, resp.status_code)
 
 
 def update_domain_settings(
@@ -584,10 +678,10 @@ def update_domain_settings(
     site_code:     str,
     daybook_set:   str,
     token:         str,
-) -> tuple[bool, str]:
+) -> tuple[bool, list]:
     """
     GET auto-created mfgCustomer → patch siteCode + daybookSetCode → POST back.
-    Returns (success, error_msg).
+    Returns (success, errors) — errors is a normalized list, see post_mfg_customer().
     """
     existing = get_mfg_customer(domain, customer_code, token)
 
@@ -597,7 +691,12 @@ def update_domain_settings(
     )
 
     if not mfg_list:
-        return False, f"Domain settings record not found for customer '{customer_code}' in domain '{domain}'"
+        return False, [{
+            "fieldName": "domainContext",
+            "message":   f"Domain settings record not found for customer '{customer_code}' in domain '{domain}'",
+            "fieldValue": domain,
+            "code":       None,
+        }]
 
     payload    = existing.get("data", existing)
     mfg_record = mfg_list[0]
@@ -609,41 +708,7 @@ def update_domain_settings(
 
 
 # =============================================================================
-# 5. WORKBOOK HELPERS
-# =============================================================================
-
-def _mark_done(ws, row_idx: int, status_col: int, error_col: int):
-    for cell in ws[row_idx]:
-        cell.fill = CLEAR_FILL
-    ws.cell(row=row_idx, column=status_col, value="DONE")
-    ws.cell(row=row_idx, column=error_col,  value="")
-
-
-def _mark_error(
-    ws,
-    row_idx:    int,
-    status_col: int,
-    error_col:  int,
-    header_row: list,
-    bad_cols:   list,
-    error_msg:  str,
-):
-    for cell in ws[row_idx]:
-        cell.fill = CLEAR_FILL
-
-    ws.cell(row=row_idx, column=1).fill          = RED_FILL
-    ws.cell(row=row_idx, column=status_col).fill = RED_FILL
-    ws.cell(row=row_idx, column=error_col).fill  = RED_FILL
-    ws.cell(row=row_idx, column=status_col, value="ERROR")
-    ws.cell(row=row_idx, column=error_col,  value=error_msg)
-
-    for col_name in bad_cols:
-        if col_name in header_row:
-            ws.cell(row=row_idx, column=header_row.index(col_name) + 1).fill = RED_FILL
-
-
-# =============================================================================
-# 6. MANDATORY FIELD CHECK
+# 5. MANDATORY FIELD CHECK
 # =============================================================================
 
 def _check_mandatory(row_data: dict) -> list[str]:
@@ -665,7 +730,7 @@ def _check_mandatory_domain(row_data: dict) -> list[str]:
 
 
 # =============================================================================
-# 7. SINGLE-FILE PROCESSOR
+# 6. SINGLE-FILE PROCESSOR
 # =============================================================================
 
 def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
@@ -691,7 +756,12 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     ok_count   = 0
     fail_count = 0
 
+    total_rows = ws.max_row - 2
+
     for row_idx, row in enumerate(ws.iter_rows(min_row=3), start=3):
+
+        if _progress_callback:
+            _progress_callback(row_idx - 2, total_rows)
 
         row_values = [cell.value for cell in row]
 
@@ -710,7 +780,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
         missing = _check_mandatory(row_data)
         if missing:
             fail_count += 1
-            _mark_error(
+            mark_error(
                 ws, row_idx, status_col, error_col, header_row,
                 missing,
                 f"Missing mandatory fields: {', '.join(missing)}",
@@ -721,7 +791,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
         # ── Operation validity check ──────────────────────────────────────
         if data_operation not in {"C", "U"}:
             fail_count += 1
-            _mark_error(
+            mark_error(
                 ws, row_idx, status_col, error_col, header_row,
                 ["Data Operation"],
                 "Data Operation must be C, U, or blank",
@@ -736,7 +806,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             missing_domain = _check_mandatory_domain(row_data)
             if missing_domain:
                 fail_count += 1
-                _mark_error(
+                mark_error(
                     ws, row_idx, status_col, error_col, header_row,
                     missing_domain,
                     f"Missing domain setting fields: {', '.join(missing_domain)}",
@@ -754,7 +824,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
             if not existing.get("data") or not existing["data"].get("customerV2s"):
                 fail_count += 1
-                _mark_error(
+                mark_error(
                     ws, row_idx, status_col, error_col, header_row, [],
                     f"UPDATE failed: Customer '{row_data.get('Customer', '')}' not found in QAD",
                 )
@@ -788,26 +858,27 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             payload = build_payload(row_data)
 
         # ── Step 1: POST customer (with one token-refresh retry) ──────────
-        success   = False
-        error_msg = ""
+        success = False
+        errors  = []
 
         for attempt in range(2):
             try:
-                success, error_msg = post_customer(payload, tm.get(), is_create=is_create)
+                success, errors = post_customer(payload, tm.get(), is_create=is_create)
                 break
             except _TokenExpired:
                 if attempt == 0:
                     tm.refresh()
                     continue
-                error_msg = "Token refresh failed — unauthorised"
+                errors = [{"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}]
                 break
             except requests.RequestException as e:
-                error_msg = f"Network error: {e}"
+                errors = [{"fieldName": None, "message": f"Network error: {e}", "fieldValue": None, "code": None}]
                 break
 
         if not success:
             fail_count += 1
-            _mark_error(ws, row_idx, status_col, error_col, header_row, [], error_msg)
+            bad_cols, error_msg = resolve_qad_errors(errors, QAD_FIELD_TO_COLUMN)
+            mark_error(ws, row_idx, status_col, error_col, header_row, bad_cols, error_msg)
             wb.save(file_path)
             time.sleep(0.1)
             continue
@@ -819,12 +890,12 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             daybook_set   = str(row_data.get("Daybook Set", "")).strip()
             customer_code = str(row_data.get("Customer", "")).strip()
 
-            domain_ok  = False
-            domain_err = ""
+            domain_ok     = False
+            domain_errors = []
 
             for attempt in range(2):
                 try:
-                    domain_ok, domain_err = update_domain_settings(
+                    domain_ok, domain_errors = update_domain_settings(
                         customer_code, domain, site_code, daybook_set, tm.get()
                     )
                     break
@@ -832,17 +903,18 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                     if attempt == 0:
                         tm.refresh()
                         continue
-                    domain_err = "Token refresh failed — unauthorised"
+                    domain_errors = [{"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}]
                     break
                 except requests.RequestException as e:
-                    domain_err = f"Network error: {e}"
+                    domain_errors = [{"fieldName": None, "message": f"Network error: {e}", "fieldValue": None, "code": None}]
                     break
 
             if not domain_ok:
                 fail_count += 1
-                _mark_error(
-                    ws, row_idx, status_col, error_col, header_row, [],
-                    f"Customer created but domain settings failed: {domain_err}",
+                bad_cols, domain_msg = resolve_qad_errors(domain_errors, DOMAIN_FIELD_TO_COLUMN)
+                mark_error(
+                    ws, row_idx, status_col, error_col, header_row, bad_cols,
+                    f"Customer created but domain settings failed: {domain_msg}",
                 )
                 wb.save(file_path)
                 time.sleep(0.1)
@@ -850,7 +922,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
         # ── All steps passed ──────────────────────────────────────────────
         ok_count += 1
-        _mark_done(ws, row_idx, status_col, error_col)
+        mark_done(ws, row_idx, status_col, error_col)
         wb.save(file_path)
         time.sleep(0.1)
 
@@ -858,7 +930,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
 
 # =============================================================================
-# 8. ORCHESTRATOR
+# 7. ORCHESTRATOR
 # =============================================================================
 
 def run(folder_path: str) -> tuple[int, int]:
@@ -909,7 +981,7 @@ def run(folder_path: str) -> tuple[int, int]:
 
 
 # =============================================================================
-# 9. ENTRY POINT
+# 8. ENTRY POINT
 # =============================================================================
 
 if __name__ == "__main__":

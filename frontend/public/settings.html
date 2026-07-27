@@ -11,21 +11,25 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{
-  background:#050e09;
-  color:#d4e8d8;
+  background:#0a0510;
+  color:#f8f8f8;
   font-family:'Inter',sans-serif;
   min-height:100vh;
   -webkit-font-smoothing:antialiased;
 }
 :root{
+  /* brand/chrome accent — Apex violet */
+  --accent:#8b5cf6;
+  --accent-bright:#a78bfa;
+  --accent-dim:rgba(139,92,246,.08);
+  --accent-border:rgba(139,92,246,.25);
+  --accent-glow:rgba(139,92,246,.22);
+  /* status colors — reserved for save/test outcomes only */
   --green:#00e676;
-  --green-dim:rgba(0,230,118,.08);
-  --green-border:rgba(0,230,118,.25);
-  --green-glow:rgba(0,230,118,.22);
   --surface:rgba(255,255,255,.03);
   --border:rgba(255,255,255,.07);
-  --muted:#527060;
-  --muted2:#2a3d30;
+  --muted:#a7a5b4;
+  --muted2:#706e82;
   --mono:'DM Mono',monospace;
   --red:#dc5050;
   --red-dim:rgba(220,80,80,.08);
@@ -38,27 +42,27 @@ body{
   display:flex;align-items:center;justify-content:space-between;
   padding:0 48px;
   border-bottom:1px solid var(--border);
-  background:#050e09;
+  background:#0a0510;
   position:sticky;top:0;z-index:100;
 }
 .nav-back{
   display:flex;align-items:center;gap:10px;
-  font-family:var(--mono);font-size:12px;
+  font-family:var(--mono);font-size:14px;
   color:var(--muted);text-decoration:none;
   letter-spacing:.04em;
   transition:color .2s;
 }
-.nav-back:hover{color:var(--green)}
+.nav-back:hover{color:var(--accent)}
 .nav-back svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
 .nav-title{
-  font-family:var(--mono);font-size:12px;
+  font-family:var(--mono);font-size:14px;
   color:#fff;letter-spacing:.08em;text-transform:uppercase;
 }
 .nav-logo img{height:80px;object-fit:contain;padding-top:4px;}
 
 /* ── LAYOUT ── */
 .page{
-  max-width:720px;
+  max-width:760px;
   margin:0 auto;
   padding:48px 24px 80px;
 }
@@ -68,23 +72,19 @@ body{
   margin-bottom:40px;
 }
 .page-hdr h1{
-  font-size:28px;font-weight:700;
+  font-size:32px;font-weight:700;
   color:#fff;letter-spacing:-.02em;
   margin-bottom:6px;
-}
-.page-hdr p{
-  font-size:13px;color:var(--muted);
-  font-family:var(--mono);
 }
 
 /* ── SECTION ── */
 .section{
-  margin-bottom:36px;
+  margin-bottom:38px;
 }
 .section-label{
-  font-family:var(--mono);font-size:10px;
+  font-family:var(--mono);font-size:13px;
   letter-spacing:.12em;text-transform:uppercase;
-  color:var(--green);opacity:.7;
+  color:var(--accent);opacity:.85;
   margin-bottom:16px;
   padding-bottom:8px;
   border-bottom:1px solid var(--border);
@@ -92,17 +92,17 @@ body{
 
 /* ── FIELD ── */
 .field{
-  margin-bottom:18px;
+  margin-bottom:20px;
 }
 .field label{
   display:block;
-  font-size:13px;font-weight:500;
+  font-size:15px;font-weight:500;
   color:#fff;
   margin-bottom:6px;
   letter-spacing:-.01em;
 }
 .field .hint{
-  font-family:var(--mono);font-size:10px;
+  font-family:var(--mono);font-size:12px;
   color:var(--muted);margin-bottom:6px;
   display:block;
 }
@@ -113,29 +113,30 @@ input[type=password],
 input[type=url]{
   width:100%;
   background:rgba(255,255,255,.03);
-  border:1px solid rgba(255,255,255,.1);
+  border:1px solid rgba(139,92,246,.22);
   border-radius:6px;
   color:var(--muted);
-  font-family:var(--mono);font-size:13px;
-  padding:10px 14px;
+  font-family:var(--mono);font-size:15px;
+  padding:11px 16px;
   outline:none;
+  box-shadow:0 0 10px rgba(139,92,246,.1), inset 0 0 8px rgba(139,92,246,.03);
   transition:border-color .2s, box-shadow .2s, color .2s;
 }
 input[type=text]:focus,
 input[type=password]:focus,
 input[type=url]:focus{
-  border-color:var(--green-border);
-  box-shadow:0 0 0 3px rgba(0,230,118,.08);
+  border-color:var(--accent-border);
+  box-shadow:0 0 0 3px rgba(139,92,246,.1), 0 0 20px rgba(139,92,246,.3);
   color:#fff;
 }
-/* path fields get green tint when filled */
+/* path fields get a purple tint once filled */
 input.path-field:not(:placeholder-shown){
-  border-color:rgba(0,230,118,.2);
-  color:var(--green);
+  border-color:rgba(139,92,246,.35);
+  color:var(--accent-bright);
 }
 input.path-field:focus{
-  border-color:var(--green-border);
-  box-shadow:0 0 0 3px rgba(0,230,118,.08);
+  border-color:var(--accent-border);
+  box-shadow:0 0 0 3px rgba(139,92,246,.1), 0 0 20px rgba(139,92,246,.3);
   color:#fff;
 }
 
@@ -159,9 +160,9 @@ input.path-field:focus{
 }
 
 .btn{
-  font-family:var(--mono);font-size:11px;
+  font-family:var(--mono);font-size:13px;
   letter-spacing:.08em;text-transform:uppercase;
-  padding:10px 28px;
+  padding:11px 30px;
   border-radius:4px;
   cursor:pointer;
   transition:all .2s;
@@ -169,26 +170,26 @@ input.path-field:focus{
   border:1px solid transparent;
 }
 .btn-primary{
-  background:var(--green);
-  color:#050e09;
-  border-color:var(--green);
+  background:var(--accent);
+  color:#0a0510;
+  border-color:var(--accent);
   font-weight:600;
 }
 .btn-primary:hover{
-  box-shadow:0 0 20px var(--green-glow);
-  background:#1aff8a;
+  box-shadow:0 0 20px var(--accent-glow);
+  background:var(--accent-bright);
 }
 .btn-primary:disabled{
   opacity:.4;cursor:not-allowed;
 }
 .btn-ghost{
   background:transparent;
-  color:var(--green);
-  border-color:rgba(0,230,118,.2);
+  color:var(--accent);
+  border-color:rgba(139,92,246,.2);
 }
 .btn-ghost:hover{
-  background:var(--green-dim);
-  border-color:var(--green-border);
+  background:var(--accent-dim);
+  border-color:var(--accent-border);
 }
 .btn-ghost:disabled{
   opacity:.4;cursor:not-allowed;
@@ -198,9 +199,9 @@ input.path-field:focus{
 #toast{
   display:none;
   align-items:center;gap:10px;
-  padding:10px 16px;
+  padding:11px 18px;
   border-radius:6px;
-  font-family:var(--mono);font-size:12px;
+  font-family:var(--mono);font-size:14px;
   margin-left:auto;
   transition:all .3s;
 }
@@ -223,16 +224,16 @@ input.path-field:focus{
 
 /* ── SPINNER ── */
 .spin{
-  width:11px;height:11px;
+  width:12px;height:12px;
   border:1.5px solid rgba(0,0,0,.2);
-  border-top-color:#050e09;
+  border-top-color:#0a0510;
   border-radius:50%;
   animation:spin .6s linear infinite;
   display:none;
 }
 .btn-ghost .spin{
-  border-color:rgba(0,230,118,.2);
-  border-top-color:var(--green);
+  border-color:rgba(139,92,246,.2);
+  border-top-color:var(--accent);
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -241,9 +242,32 @@ input.path-field:focus{
   border:none;border-top:1px solid var(--border);
   margin:32px 0;
 }
+
+/* ── BREATHING BACKGROUND (matches main loader page) ── */
+#grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+#grid-bg svg{width:100%;height:100%;animation:grid-pulse 5s ease-in-out infinite;}
+@keyframes grid-pulse{0%,100%{opacity:.38}50%{opacity:.9}}
+#grid-bg::after{content:'';position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);width:900px;height:700px;background:radial-gradient(ellipse at center,rgba(139,92,246,.14) 0%,rgba(99,102,241,.07) 40%,transparent 70%);pointer-events:none;animation:bloom 7s ease-in-out infinite;}
+@keyframes bloom{0%,100%{opacity:.6;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.1)}}
+.page{position:relative;z-index:1;}
 </style>
 </head>
 <body>
+
+<div id="grid-bg">
+  <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none">
+    <defs>
+      <pattern id="smallgrid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(139,92,246,0.07)" stroke-width="0.5"/>
+      </pattern>
+      <pattern id="grid" width="200" height="200" patternUnits="userSpaceOnUse">
+        <rect width="200" height="200" fill="url(#smallgrid)"/>
+        <path d="M 200 0 L 0 0 0 200" fill="none" stroke="rgba(139,92,246,0.12)" stroke-width="1"/>
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#grid)"/>
+  </svg>
+</div>
 
 <!-- NAV -->
 <nav id="nav">
@@ -262,7 +286,6 @@ input.path-field:focus{
 
   <div class="page-hdr">
     <h1>Configuration</h1>
-    <p>QAD connection &amp; data folder paths — saved to config.json</p>
   </div>
 
   <!-- ── SECTION 1: OAuth / QAD Connection ── -->
@@ -272,29 +295,29 @@ input.path-field:focus{
     <div class="field">
       <label>Base URL</label>
       <span class="hint">The root URL of your QAD Cloud ERP instance</span>
-      <input type="url" id="base_url" placeholder="https://your-instance.adaptive.qad.com/clouderp"/>
+      <input type="url" id="base_url"/>
     </div>
 
     <div class="field">
       <label>Client ID</label>
       <span class="hint">OAuth2 client_id for API access</span>
-      <input type="text" id="client_id" placeholder="afb97fd2..."/>
+      <input type="text" id="client_id"/>
     </div>
 
     <div class="field">
       <label>Username</label>
-      <input type="text" id="username" placeholder="demo"/>
+      <input type="text" id="username"/>
     </div>
 
     <div class="field">
       <label>Password</label>
-      <input type="password" id="password" placeholder="••••••••"/>
+      <input type="password" id="password"/>
     </div>
 
     <div class="field">
       <label>Grant Type</label>
       <span class="hint">Usually "password" — do not change unless instructed</span>
-      <input type="text" id="grant_type" placeholder="password"/>
+      <input type="text" id="grant_type"/>
     </div>
   </div>
 
@@ -345,6 +368,7 @@ const FOLDER_DEFS = [
   { key: 'sales_order',        label: 'Sales Order' },
   { key: 'supplier_item',      label: 'Supplier Item' },
   { key: 'supplier_price_list',label: 'Supplier Price List' },
+  { key: 'price_list',         label: 'Price List' },
   { key: 'item',               label: 'Item' },
 ];
 
@@ -355,8 +379,7 @@ FOLDER_DEFS.forEach(f => {
   wrap.className = 'field';
   wrap.innerHTML = `
     <label>${f.label}</label>
-    <input class="path-field" type="text" id="folder_${f.key}"
-           placeholder="../Data/${f.label.replace(/ /g,'_')}"/>
+    <input class="path-field" type="text" id="folder_${f.key}"/>
   `;
   fgrid.appendChild(wrap);
 });

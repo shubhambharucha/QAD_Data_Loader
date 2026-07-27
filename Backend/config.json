@@ -1,10 +1,10 @@
 {
   "qad": {
-    "base_url": "https://qad.test.piiem.orcait.net/clouderp/",
+    "base_url": "http://qadee.yash.com:22010/qad-central",
     "auth": {
-      "client_id": "d37a03bd26d01f88f1140b8cb093804e",
-      "username": "mfg@orcait.net",
-      "password": "",
+      "client_id": "82c2ddcc074402a6e1148334d89117cc",
+      "username": "shubham.bharucha@yash.com",
+      "password": "Firebird!2nova",
       "grant_type": "password"
     }
   },
@@ -18,6 +18,7 @@
     "production_order": "../Data/ProductionOrder",
     "item": "../Data/Item",
     "supplier_item": "../Data/Supplier_Item",
-    "supplier_price_list": "../Data/SupplierPriceList"
+    "supplier_price_list": "../Data/SupplierPriceList",
+    "price_list": "../Data/PriceList"
   }
 }
