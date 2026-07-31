@@ -94,17 +94,15 @@ PRICING_HEADERS = [
     "Amount Type", "Quantity Type", "Combination Type",
     "Minimum Order", "Maximum Quantity", "Maximum orders", "Break category",
 ]
+LIST_PRICE = [
+    "Maximum Price", "Minimum Price", "List Price",
+]   
 LOADER_HEADERS = ["Data Operation", "Status ", "Error"]
 
-ALL_HEADERS = MAIN_HEADERS + PRICING_HEADERS + LOADER_HEADERS
+ALL_HEADERS = MAIN_HEADERS + PRICING_HEADERS + LIST_PRICE + LOADER_HEADERS
 
 # Reference only -- price_list_load.py's own identity/locked fields.
 # No longer used to lock cells in this script (see module docstring).
-LOCKED_ON_UPDATE = [
-    "Domain", "Price List", "Customer Code", "Item Code",
-    "Currency", "Unit Of Measure", "Start Date",
-]
-
 
 # =============================================================================
 # VALUE MAPS -- business label (shown in UI) <-> QAD numeric code (on the wire)
@@ -298,6 +296,66 @@ def iter_browse_rows(
         page += 1
         page_action = "next"  # ASSUMPTION -- see note above, not yet confirmed
 
+# =============================================================================
+# 3b. SCOPED PRICING DETAIL GET
+# =============================================================================
+# Maximum Price / Minimum Price / List Price are CONFIRMED absent from the
+# Browse row (network capture 2026-07-27 -- full key list checked, none of
+# the three present). They only exist on the keyed Detail GET. Only called
+# when Amount Type == "1" (List Price), since that's the only pricing type
+# these fields are relevant for. Soft-fail by design: any error here just
+# leaves the three price columns blank on that row -- never fails the row
+# or the overall fetch.
+
+DETAIL_VIEW_URI = "urn:be:com.qad.sales.pricing.IPriceListV2"
+
+
+def get_price_list_pricing_fields(key: dict, tm: "TokenManager") -> dict | None:
+    url = f"{CONFIG['qad']['base_url']}/api/erp/priceListV2s"
+    params = {
+        "domainCode":    key.get("domainCode", ""),
+        "priceListCode": key.get("priceListCode", ""),
+        "customerCode":  key.get("customerCode", ""),
+        "itemCode":      key.get("itemCode", ""),
+        "attributeCode": key.get("attributeCode", ""),
+        "orderCode":     key.get("orderCode", ""),
+        "currencyCode":  key.get("currencyCode", ""),
+        "unitOfMeasure": key.get("unitOfMeasure", ""),
+        "startDate":     key.get("startDate", ""),
+        "viewUri":       DETAIL_VIEW_URI,
+    }
+
+    for attempt in range(2):
+        try:
+            resp = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {tm.get()}"},
+                params=params,
+                timeout=30,
+            )
+            if resp.status_code == 401:
+                if attempt == 0:
+                    tm.refresh()
+                    continue
+                return None
+            resp.raise_for_status()
+            body = resp.json()
+            pl_list = body.get("data", {}).get("priceListV2s") or body.get("priceListV2s") or []
+            if not pl_list:
+                return None
+            pl = pl_list[0]
+            return {
+                "Maximum Price": pl.get("maximumPrice", ""),
+                "Minimum Price": pl.get("minimumPrice", ""),
+                "List Price":    pl.get("listPrice", ""),
+            }
+        except requests.RequestException as e:
+            print(f"[fetch_price_lists] WARNING: pricing detail GET failed for "
+                  f"{key.get('priceListCode')}/{key.get('itemCode')}: {e} -- "
+                  f"leaving price columns blank")
+            return None
+
+    return None
 
 # =============================================================================
 # 4. BROWSE ROW -> EXCEL ROW  (flat dotted keys -> friendly labels)
@@ -330,6 +388,10 @@ def flatten_browse_row(row: dict) -> dict:
         "Minimum Order":     g("minNetOrd"),
         "Maximum Quantity":  g("maximumQty"),
         "Maximum orders":    g("maxOrders"),
+        #--- pricing ---#
+        "Maximum Price":      g("maximumPrice"),
+        "Minimum Price":      g("minimumPrice"),
+        "List Price":         g("listPrice"),
         "Break category":    g("breakCategory"),
         "Data Operation":    "U",
         "Status ":           "",
@@ -525,6 +587,23 @@ def fetch_to_excel(
             _progress_callback(i, total)
 
         flat = flatten_browse_row(browse_row)
+
+        amount_type_code = str(browse_row.get("priceListV2.amountType", ""))
+        if amount_type_code == "1":
+            detail_key = {
+                "domainCode":    browse_row.get("priceListV2.domainCode", ""),
+                "priceListCode": browse_row.get("priceListV2.priceListCode", ""),
+                "customerCode":  browse_row.get("priceListV2.customerCode", ""),
+                "itemCode":      browse_row.get("priceListV2.itemCode", ""),
+                "attributeCode": browse_row.get("priceListV2.attributeCode", ""),
+                "orderCode":     browse_row.get("priceListV2.orderCode", ""),
+                "currencyCode":  browse_row.get("priceListV2.currencyCode", ""),
+                "unitOfMeasure": browse_row.get("priceListV2.unitOfMeasure", ""),
+                "startDate":     browse_row.get("priceListV2.startDate", ""),
+            }
+            pricing = get_price_list_pricing_fields(detail_key, tm)
+            if pricing:
+                flat.update(pricing)
 
         for col_idx, header in enumerate(ALL_HEADERS, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=flat.get(header, ""))

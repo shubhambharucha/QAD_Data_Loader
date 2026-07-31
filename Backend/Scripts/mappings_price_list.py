@@ -1,5 +1,5 @@
 """
-price_list_mappings.py
+mappings_price_list.py
 
 Shared mapping layer for:
 - price_list_fetch.py

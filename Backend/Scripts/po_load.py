@@ -2,23 +2,56 @@
 PO_load.py
 ----------
 Loads Purchase Order headers and lines from all .xlsx files in the
-configured PurchaseOrder folder into QAD via the purchaseOrders API.
+configured PurchaseOrder folder into QAD via the purchaseOrderHeaders /
+purchaseOrderLines APIs.
 
 Behaviour
 ---------
 - Reads base_url and auth from config.json (via config.py)
 - Fetches one OAuth token per run; refreshes automatically on 401
+  (unchanged token pattern: api_get()/api_post() retry once internally)
 - Skips rows with Status = DONE
-- On success  → clears all fills, sets Status = DONE
-- On failure  → red-fills col 1 + Error cell, sets Status = ERROR
-- Saves workbook after every row so progress survives a crash
-- Renames file to error_<name> if any failures occurred
+- Error/response handling now shares the same framework as
+  Customer_load.py:
+    * qad_response_utils.normalize_response() turns every QAD POST
+      response into a uniform (success, errors[]) shape, regardless of
+      whether QAD sent a submitResult-wrapped envelope or a bare
+      top-level errors[] (gateway/permission failures).
+    * excel_format_utils.resolve_qad_errors() maps each errors[]
+      fieldName back to the Excel column name via PO_HEADER_FIELD_TO_COLUMN
+      / PO_LINE_FIELD_TO_COLUMN below, so the exact bad cell gets
+      highlighted instead of just col 1 + Error.
+    * excel_format_utils.mark_done() / mark_error() replace the old
+      mark_row_success() / mark_row_error() helpers and share the same
+      RED_FILL / CLEAR_FILL constants used by every other loader.
+- Lightweight mandatory-field check runs before any API call, for both
+  Header rows and Line rows.
+- Network errors, persistent-401 (token refresh failure), and gateway/
+  permission errors are all surfaced as normalized error dicts so they
+  flow through the exact same resolve_qad_errors() / mark_error() path
+  as ordinary field validation errors.
+- Saves workbook after every row so progress survives a crash.
+- Renames file to error_<name> if any failures occurred (unchanged).
 - Returns (total_success, total_fail)
 
-Sheet layout
-------------
+Sheet layout (UNCHANGED)
+------------------------
 Workbook must contain two sheets: 'Header' and 'Lines'.
 Each sheet must have a header row (row 1) with column names.
+
+Purchase Order business logic / API workflow — UNCHANGED
+----------------------------------------------------------
+  Header : single POST to purchaseOrderHeaders
+  Lines  : GET  init (QAD assigns line number)
+           POST fieldChange(siteCode)
+           POST fieldChange(itemCode)
+           GET  isReceived check (fire-and-forget)
+           POST fieldChange(quantityOrdered)
+           POST fieldChange(purchaseCost)
+           POST sync to purchaseOrderLinesGrid
+None of the endpoints, payload fields, sequencing, or line-number
+handling have been changed — only how responses are parsed and how
+Excel is annotated.
 """
 
 import os
@@ -26,39 +59,93 @@ import sys
 import time
 import requests
 import openpyxl
-from openpyxl.styles import PatternFill
 from datetime import datetime
 from collections import defaultdict
 
-# ── Config ────────────────────────────────────────────────────────────────
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# ── Progress callback (used by main.py SSE streaming) ──────────────────
+
+_progress_callback = None
+
+def set_progress_callback(callback):
+    global _progress_callback
+    _progress_callback = callback
+
+
+# ── Path / config ─────────────────────────────────────────────────────────
+ROOT_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, SCRIPTS_DIR)
 from config import CONFIG
+from excel_format_utils import RED_FILL, CLEAR_FILL, mark_done, mark_error, resolve_qad_errors
+from qad_response_utils import normalize_response
 
 _BASE_URL = CONFIG["qad"]["base_url"]
 
-# ── API endpoint templates ─────────────────────────────────────────────────
+# ── API endpoint templates (UNCHANGED) ─────────────────────────────────────
 HEADER_URL       = f"{_BASE_URL}/api/erp/purchaseOrderHeaders?viewUri=urn:be:com.qad.purchasing.purchaseorders.IPurchaseOrderHeader"
 INIT_LINE_URL    = f"{_BASE_URL}/api/erp/purchaseOrderLinesGrid?initialize=true&domainCode={{domain}}&purchaseOrderNumber={{po}}"
 FIELD_CHANGE_URL = f"{_BASE_URL}/api/erp/purchaseOrderLines/fieldChangeV2?fieldName={{fieldName}}"
 IS_RECEIVED_URL  = f"{_BASE_URL}/api/erp/purchaseOrderLines/isReceivedPurchaseOrderLineV2?domainCode={{domain}}&purchaseOrderNumber={{po}}&purchaseOrderLine={{line}}"
 SYNC_LINE_URL    = f"{_BASE_URL}/api/erp/purchaseOrderLinesGrid"
 
-# ── Fill constants ────────────────────────────────────────────────────────
-RED_FILL   = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-CLEAR_FILL = PatternFill(fill_type=None)
+# ── Mandatory columns — Header sheet ───────────────────────────────────────
+MANDATORY_HEADER_COLUMNS = [
+    "PO Number",
+    "Domain Code",
+    "Supplier Code",
+    "Currency",
+    "Credit Terms",
+    "Daybook Set",
+    "Ship To Site",
+    "Bill To Code",
+]
 
-# ── Date formats accepted in the spreadsheet ──────────────────────────────
-DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"]
+# ── Mandatory columns — Lines sheet ─────────────────────────────────────────
+MANDATORY_LINE_COLUMNS = [
+    "PO Number",
+    "Site Code",
+    "Item Code",
+    "Quantity Ordered",
+    "Unit Price",
+]
+
+# ── QAD API fieldName → Excel column name (Header / purchaseOrderHeaders) ──
+# Extend this map whenever a new QAD fieldName is observed in errors[]
+# that should highlight a specific Excel cell. Anything NOT in this map
+# still shows up in the Error message text — it just won't get its own
+# highlighted cell.
+PO_HEADER_FIELD_TO_COLUMN = {
+    "purchaseOrderNumber": "PO Number",
+    "domainCode":          "Domain Code",
+    "supplierCode":        "Supplier Code",
+    "currencyCode":        "Currency",
+    "creditTermsCode":     "Credit Terms",
+    "daybookSetCode":      "Daybook Set",
+    "shipToSite":          "Ship To Site",
+    "billToCode":          "Bill To Code",
+    "taxEnvironment":      "Tax Environment",
+    "languageCode":        "Language Code",
+    "contact":             "Contact",
+    "remarks":             "Remarks",
+    "orderDate":           "Order Date",
+    "dueDate":             "Due Date",
+}
+
+# ── QAD API fieldName → Excel column name (Lines / purchaseOrderLines) ─────
+PO_LINE_FIELD_TO_COLUMN = {
+    "purchaseOrderNumber": "PO Number",
+    "siteCode":            "Site Code",
+    "itemCode":            "Item Code",
+    "quantityOrdered":     "Quantity Ordered",
+    "purchaseCost":        "Unit Price",
+    "dueDate":             "Due Date",
+}
 
 
 # =============================================================================
-# 1. AUTHENTICATION
+# 1. AUTHENTICATION  (unchanged token pattern)
 # =============================================================================
-
-class _TokenExpired(Exception):
-    pass
-
 
 def _fetch_token() -> str:
     token_url = f"{_BASE_URL}/oauth/token"
@@ -93,7 +180,7 @@ class TokenManager:
 
 
 # =============================================================================
-# 2. HTTP HELPERS  (auto-refresh on 401, one retry)
+# 2. HTTP HELPERS  (auto-refresh on 401, one retry — UNCHANGED behaviour)
 # =============================================================================
 
 def api_get(url: str, tm: TokenManager) -> tuple[requests.Response, dict]:
@@ -124,8 +211,63 @@ def api_post(url: str, payload: dict, tm: TokenManager) -> tuple[requests.Respon
     return resp, {}
 
 
+# ── Normalized-error wrappers ────────────────────────────────────────────
+# These wrap api_get()/api_post() so every caller (header creation, line
+# creation) gets back the same (resp, resp_json, errors) shape used
+# throughout Customer_load.py — errors is either None (success) or a
+# normalized list of {"fieldName", "message", "fieldValue", "code"} dicts,
+# ready to be handed straight to resolve_qad_errors().
+
+def _network_error(exc: Exception) -> dict:
+    return {"fieldName": None, "message": f"Network error: {exc}", "fieldValue": None, "code": None}
+
+
+def _token_error() -> dict:
+    return {"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}
+
+
+def _http_error(status_code: int) -> dict:
+    return {"fieldName": None, "message": f"Unexpected response — HTTP {status_code}", "fieldValue": None, "code": None}
+
+
+def safe_get(url: str, tm: TokenManager) -> tuple[requests.Response | None, dict | None, list | None]:
+    """GET wrapped with network-error trapping. Does NOT run normalize_response
+    (GET responses here are plain data payloads, not submit envelopes) —
+    mirrors get_customer()/get_mfg_customer() in Customer_load.py, which are
+    also not normalized."""
+    try:
+        resp, resp_json = api_get(url, tm)
+    except requests.RequestException as e:
+        return None, None, [_network_error(e)]
+
+    if resp.status_code == 401:
+        return resp, resp_json, [_token_error()]
+    if resp.status_code != 200:
+        return resp, resp_json, [_http_error(resp.status_code)]
+    return resp, resp_json, None
+
+
+def safe_post(url: str, payload: dict, tm: TokenManager) -> tuple[requests.Response | None, dict | None, list | None]:
+    """POST wrapped with network-error trapping and normalize_response(),
+    exactly like post_customer()/post_mfg_customer() in Customer_load.py."""
+    try:
+        resp, resp_json = api_post(url, payload, tm)
+    except requests.RequestException as e:
+        return None, None, [_network_error(e)]
+
+    if resp.status_code == 401:
+        return resp, resp_json, [_token_error()]
+
+    success, errors = normalize_response(resp_json, resp.status_code)
+    if not success:
+        if not errors:
+            errors = [_http_error(resp.status_code)]
+        return resp, resp_json, errors
+    return resp, resp_json, None
+
+
 # =============================================================================
-# 3. VALUE EXTRACTORS
+# 3. VALUE EXTRACTORS  (unchanged)
 # =============================================================================
 
 def sv(row_data: dict, key: str, default: str = "") -> str:
@@ -138,7 +280,6 @@ def fv(row_data: dict, key: str, default: float = 0.0) -> float:
         return float(row_data.get(key, default))
     except (TypeError, ValueError):
         return default
-
 
 
 def to_iso_date(val) -> str:
@@ -154,7 +295,20 @@ def to_iso_date(val) -> str:
 
 
 # =============================================================================
-# 4. WORKBOOK HELPERS
+# 4. MANDATORY FIELD CHECK
+# =============================================================================
+
+def _check_mandatory(row_data: dict, columns: list[str]) -> list[str]:
+    missing = []
+    for col in columns:
+        v = row_data.get(col)
+        if v is None or str(v).strip() == "" or str(v).strip().lower() == "none":
+            missing.append(col)
+    return missing
+
+
+# =============================================================================
+# 5. WORKBOOK HELPERS  (sheet/header layout UNCHANGED — row 1 = headers)
 # =============================================================================
 
 def ensure_columns(ws, *col_names: str) -> list:
@@ -170,26 +324,7 @@ def ensure_columns(ws, *col_names: str) -> list:
     return header_row
 
 
-def mark_row_success(ws, row_idx: int, status_col: int, error_col: int):
-    for cell in ws[row_idx]:
-        cell.fill = CLEAR_FILL
-    ws.cell(row=row_idx, column=status_col, value="DONE")
-    ws.cell(row=row_idx, column=error_col,  value="")
-
-
-def mark_row_error(ws, row_idx: int, status_col: int, error_col: int, error_msg: str):
-    """Red-fill col 1 and the Error cell; clear everything else."""
-    for cell in ws[row_idx]:
-        cell.fill = CLEAR_FILL
-    ws.cell(row=row_idx, column=1).fill = RED_FILL
-    ws.cell(row=row_idx, column=status_col, value="ERROR")
-    ws.cell(row=row_idx, column=error_col,  value=error_msg)
-    ws.cell(row=row_idx, column=error_col).fill = RED_FILL
-
-
-# =============================================================================
-# 5. FILE RENAME HELPERS
-# =============================================================================
+# ── File rename helpers (UNCHANGED) ─────────────────────────────────────────
 
 def rename_error(file_path: str) -> str:
     folder, name = os.path.dirname(file_path), os.path.basename(file_path)
@@ -210,25 +345,7 @@ def rename_restore(file_path: str) -> str:
 
 
 # =============================================================================
-# 6. API ERROR PARSER
-# =============================================================================
-
-def parse_api_errors(resp_json: dict, entity_name: str = "") -> str:
-    errors = resp_json.get("submitResult", {}).get("errors", [])
-    msgs = []
-    for e in errors:
-        msg = e.get("message", "")
-        if "already exists" in msg.lower():
-            msgs.append(f"Duplicate — '{entity_name}' already exists")
-        elif e.get("fieldName"):
-            msgs.append(f"Field '{e['fieldName']}': {msg}")
-        else:
-            msgs.append(msg)
-    return "; ".join(msgs) or resp_json.get("message", "Unknown error")
-
-
-# =============================================================================
-# 7. PAYLOAD BUILDER
+# 6. PAYLOAD BUILDER  (UNCHANGED)
 # =============================================================================
 
 def build_header_payload(row_data: dict) -> dict:
@@ -284,7 +401,8 @@ def build_header_payload(row_data: dict) -> dict:
 
 
 # =============================================================================
-# 8. LINE CREATION FLOW  (unchanged logic)
+# 7. LINE CREATION FLOW  (API sequencing UNCHANGED — only response/error
+#    handling now goes through safe_get()/safe_post() + normalize_response())
 # =============================================================================
 
 def create_line(
@@ -292,7 +410,7 @@ def create_line(
     po_num:        str,
     line_row_data: dict,
     tm:            TokenManager,
-) -> tuple[bool, str, int]:
+) -> tuple[bool, list, int]:
     """
     Full multi-step line creation:
       init → fieldChange(siteCode) → fieldChange(itemCode) →
@@ -300,7 +418,9 @@ def create_line(
       fieldChange(purchaseCost) → sync/commit
 
     Line number is assigned by QAD in the init response — we never override it.
-    Returns (success, error_msg, line_number).
+    Returns (success, errors, line_number), where errors is a normalized
+    list of {"fieldName", "message", "fieldValue", "code"} dicts (empty on
+    success) ready for resolve_qad_errors().
     """
     site_code = sv(line_row_data, "Site Code")
     item_code = sv(line_row_data, "Item Code")
@@ -309,16 +429,14 @@ def create_line(
     due_dt    = to_iso_date(line_row_data.get("Due Date")) or to_iso_date(datetime.now())
 
     # 1. Initialise blank line — QAD returns the next available line number
-    print(f"    ↳ Init line (QAD will assign number)...")
-    resp, resp_json = api_get(
-        INIT_LINE_URL.format(domain=domain, po=po_num), tm
-    )
-    if resp.status_code != 200:
-        return False, f"Init failed: HTTP {resp.status_code}", 0
+    print("    ↳ Init line (QAD will assign number)...")
+    resp, resp_json, errors = safe_get(INIT_LINE_URL.format(domain=domain, po=po_num), tm)
+    if errors:
+        return False, errors, 0
 
-    lines = resp_json.get("data", {}).get("purchaseOrderLines", [])
+    lines = (resp_json or {}).get("data", {}).get("purchaseOrderLines", [])
     if not lines:
-        return False, "Init returned no line object", 0
+        return False, [{"fieldName": None, "message": "Init returned no line object", "fieldValue": None, "code": None}], 0
 
     line        = lines[0]
     line_number = line["purchaseOrderLine"]   # QAD-assigned — do not override
@@ -326,86 +444,85 @@ def create_line(
 
     # 2. fieldChange: siteCode
     line["siteCode"] = site_code
-    resp, resp_json = api_post(
+    resp, resp_json, errors = safe_post(
         FIELD_CHANGE_URL.format(fieldName="siteCode"),
         {"purchaseOrderLines": [line]}, tm,
     )
-    if resp.status_code != 200:
-        return False, f"fieldChange(siteCode) failed: HTTP {resp.status_code}", line_number
-    lines = resp_json.get("data", {}).get("purchaseOrderLines", [])
+    if errors:
+        return False, errors, line_number
+    lines = (resp_json or {}).get("data", {}).get("purchaseOrderLines", [])
     if not lines:
-        return False, "fieldChange(siteCode) returned no line", line_number
+        return False, [{"fieldName": "siteCode", "message": "fieldChange(siteCode) returned no line", "fieldValue": site_code, "code": None}], line_number
     line = lines[0]
 
     # 3. fieldChange: itemCode
     line["itemCode"] = item_code
-    resp, resp_json = api_post(
+    resp, resp_json, errors = safe_post(
         FIELD_CHANGE_URL.format(fieldName="itemCode"),
         {"purchaseOrderLines": [line]}, tm,
     )
-    if resp.status_code != 200:
-        return False, f"fieldChange(itemCode) failed: HTTP {resp.status_code}", line_number
-    lines = resp_json.get("data", {}).get("purchaseOrderLines", [])
+    if errors:
+        return False, errors, line_number
+    lines = (resp_json or {}).get("data", {}).get("purchaseOrderLines", [])
     if not lines:
-        return False, "fieldChange(itemCode) returned no line", line_number
+        return False, [{"fieldName": "itemCode", "message": "fieldChange(itemCode) returned no line", "fieldValue": item_code, "code": None}], line_number
     line = lines[0]
 
     time.sleep(0.1)
 
     # 4. isReceived check (fire-and-forget) — use QAD-assigned line number
-    api_get(IS_RECEIVED_URL.format(domain=domain, po=po_num, line=line_number), tm)
+    safe_get(IS_RECEIVED_URL.format(domain=domain, po=po_num, line=line_number), tm)
 
     time.sleep(0.1)
 
     # 5. fieldChange: quantityOrdered
     line["quantityOrdered"] = qty
-    resp, resp_json = api_post(
+    resp, resp_json, errors = safe_post(
         FIELD_CHANGE_URL.format(fieldName="quantityOrdered"),
         {"purchaseOrderLines": [line]}, tm,
     )
-    if resp.status_code != 200:
-        return False, f"fieldChange(quantityOrdered) failed: HTTP {resp.status_code}", line_number
-    lines = resp_json.get("data", {}).get("purchaseOrderLines", [])
+    if errors:
+        return False, errors, line_number
+    lines = (resp_json or {}).get("data", {}).get("purchaseOrderLines", [])
     if not lines:
-        return False, "fieldChange(quantityOrdered) returned no line", line_number
+        return False, [{"fieldName": "quantityOrdered", "message": "fieldChange(quantityOrdered) returned no line", "fieldValue": qty, "code": None}], line_number
     line = lines[0]
 
     # 6. fieldChange: purchaseCost
     line["purchaseCost"] = price
-    resp, resp_json = api_post(
+    resp, resp_json, errors = safe_post(
         FIELD_CHANGE_URL.format(fieldName="purchaseCost"),
         {"purchaseOrderLines": [line]}, tm,
     )
-    if resp.status_code != 200:
-        return False, f"fieldChange(purchaseCost) failed: HTTP {resp.status_code}", line_number
-    lines = resp_json.get("data", {}).get("purchaseOrderLines", [])
+    if errors:
+        return False, errors, line_number
+    lines = (resp_json or {}).get("data", {}).get("purchaseOrderLines", [])
     if not lines:
-        return False, "fieldChange(purchaseCost) returned no line", line_number
+        return False, [{"fieldName": "purchaseCost", "message": "fieldChange(purchaseCost) returned no line", "fieldValue": price, "code": None}], line_number
     line = lines[0]
 
     # 7. Sync / commit line
-    resp, resp_json = api_post(SYNC_LINE_URL, {"purchaseOrderLines": [line]}, tm)
-    if resp.status_code == 200 and resp_json.get("submitResult", {}).get("success"):
-        return True, "", line_number
+    resp, resp_json, errors = safe_post(SYNC_LINE_URL, {"purchaseOrderLines": [line]}, tm)
+    if errors:
+        return False, errors, line_number
 
-    error_msg = parse_api_errors(resp_json, f"PO {po_num} Line {line_number}")
-    return False, f"Sync failed: {error_msg}", line_number
+    return True, [], line_number
 
 
 # =============================================================================
-# 9. SINGLE-FILE PROCESSOR
+# 8. SINGLE-FILE PROCESSOR
 # =============================================================================
 
 def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     print(f"\n{'─'*55}")
-    print(f"  📄 {os.path.basename(file_path)}")
+    print(f"  Loading: {os.path.basename(file_path)}")
     print(f"{'─'*55}")
 
     wb = openpyxl.load_workbook(file_path)
 
     if "Header" not in wb.sheetnames or "Lines" not in wb.sheetnames:
-        print("❌ Workbook must have sheets named 'Header' and 'Lines'")
-        return 0, 1
+        print("ERROR: Workbook must have sheets named 'Header' and 'Lines'")
+        raise RuntimeError("Workbook must have sheets named 'Header' and 'Lines'")
 
     ws_h = wb["Header"]
     ws_l = wb["Lines"]
@@ -443,37 +560,46 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     h_success = h_skip = h_fail = 0
     l_success = l_skip = l_fail = 0
 
-    for po_num, (h_row_idx, h_row_data) in header_rows.items():
-        print(f"\n  📦 PO: {po_num}")
+    total_pos = len(header_rows)
+
+    for idx, (po_num, (h_row_idx, h_row_data)) in enumerate(header_rows.items(), start=1):
+        if _progress_callback:
+            _progress_callback(idx, total_pos)
+
+        print(f"\n  PO: {po_num}")
 
         # ── Step 1: Create header ─────────────────────────────────────────
         if str(h_row_data.get("Status", "")).strip().upper() == "DONE":
-            print("  ⏭  Header — already DONE")
+            print("  Header — already DONE, skipping")
             h_skip += 1
         else:
-            try:
-                payload = build_header_payload(h_row_data)
-                resp, resp_json = api_post(HEADER_URL, payload, tm)
-
-                if resp.status_code == 200 and resp_json.get("submitResult", {}).get("success"):
-                    mark_row_success(ws_h, h_row_idx, h_status_col, h_error_col)
-                    h_success += 1
-                    print(f"  ✔  Header: {po_num}")
-                else:
-                    error_msg = parse_api_errors(resp_json, po_num)
-                    mark_row_error(ws_h, h_row_idx, h_status_col, h_error_col, error_msg)
-                    h_fail += 1
-                    print(f"  ✘  Header: {po_num} — {error_msg}")
-                    wb.save(file_path)
-                    continue
-
-            except Exception as e:
-                mark_row_error(ws_h, h_row_idx, h_status_col, h_error_col, str(e))
+            # Mandatory check before any API call
+            missing = _check_mandatory(h_row_data, MANDATORY_HEADER_COLUMNS)
+            if missing:
                 h_fail += 1
-                print(f"  ✘  Header: {po_num} — {e}")
+                mark_error(
+                    ws_h, h_row_idx, h_status_col, h_error_col, h_headers,
+                    missing,
+                    f"Missing mandatory fields: {', '.join(missing)}",
+                )
                 wb.save(file_path)
                 continue
 
+            payload = build_header_payload(h_row_data)
+            resp, resp_json, errors = safe_post(HEADER_URL, payload, tm)
+
+            if errors:
+                h_fail += 1
+                bad_cols, error_msg = resolve_qad_errors(errors, PO_HEADER_FIELD_TO_COLUMN)
+                mark_error(ws_h, h_row_idx, h_status_col, h_error_col, h_headers, bad_cols, error_msg)
+                print(f"  Header FAILED: {po_num} — {error_msg}")
+                wb.save(file_path)
+                continue
+
+            mark_done(ws_h, h_row_idx, h_status_col, h_error_col)
+            h_success += 1
+            print(f"  Header OK: {po_num}")
+            wb.save(file_path)
             time.sleep(0.3)
 
         # ── Step 2: Create lines ──────────────────────────────────────────
@@ -481,13 +607,24 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
         po_lines = line_rows.get(po_num, [])
 
         if not po_lines:
-            print(f"  ⚠  No lines found for PO: {po_num}")
+            print(f"  WARNING: No lines found for PO: {po_num}")
             continue
 
         for seq, (l_row_idx, l_row_data) in enumerate(po_lines, start=1):
             if str(l_row_data.get("Status", "")).strip().upper() == "DONE":
-                print(f"    ⏭  Line {seq} — already DONE")
+                print(f"    Line {seq} — already DONE, skipping")
                 l_skip += 1
+                continue
+
+            missing = _check_mandatory(l_row_data, MANDATORY_LINE_COLUMNS)
+            if missing:
+                l_fail += 1
+                mark_error(
+                    ws_l, l_row_idx, l_status_col, l_error_col, l_headers,
+                    missing,
+                    f"Missing mandatory fields: {', '.join(missing)}",
+                )
+                wb.save(file_path)
                 continue
 
             item  = sv(l_row_data, "Item Code")
@@ -495,22 +632,17 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             price = fv(l_row_data, "Unit Price")
             print(f"    → {item} | qty={qty} | price={price}")
 
-            try:
-                success, error_msg, line_no = create_line(domain, po_num, l_row_data, tm)
+            success, errors, line_no = create_line(domain, po_num, l_row_data, tm)
 
-                if success:
-                    mark_row_success(ws_l, l_row_idx, l_status_col, l_error_col)
-                    l_success += 1
-                    print(f"    ✔  Line {line_no}: {item}")
-                else:
-                    mark_row_error(ws_l, l_row_idx, l_status_col, l_error_col, error_msg)
-                    l_fail += 1
-                    print(f"    ✘  Line {line_no}: {item} — {error_msg}")
-
-            except Exception as e:
-                mark_row_error(ws_l, l_row_idx, l_status_col, l_error_col, str(e))
+            if success:
+                mark_done(ws_l, l_row_idx, l_status_col, l_error_col)
+                l_success += 1
+                print(f"    Line {line_no} OK: {item}")
+            else:
                 l_fail += 1
-                print(f"    ✘  {item} — {e}")
+                bad_cols, error_msg = resolve_qad_errors(errors, PO_LINE_FIELD_TO_COLUMN)
+                mark_error(ws_l, l_row_idx, l_status_col, l_error_col, l_headers, bad_cols, error_msg)
+                print(f"    Line {line_no} FAILED: {item} — {error_msg}")
 
             wb.save(file_path)
             time.sleep(0.2)
@@ -518,21 +650,21 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     total_success = h_success + l_success
     total_fail    = h_fail    + l_fail
 
-    print(f"\n  📊 Headers — ✔ {h_success} | ⏭ {h_skip} | ✘ {h_fail}")
-    print(f"  📊 Lines   — ✔ {l_success} | ⏭ {l_skip} | ✘ {l_fail}")
+    print(f"\n  Headers — OK {h_success} | Skipped {h_skip} | Failed {h_fail}")
+    print(f"  Lines   — OK {l_success} | Skipped {l_skip} | Failed {l_fail}")
 
     return total_success, total_fail
 
 
 # =============================================================================
-# 10. ORCHESTRATOR
+# 9. ORCHESTRATOR
 # =============================================================================
 
 def run(folder_path: str) -> tuple[int, int]:
     folder = os.path.abspath(folder_path)
 
     if not os.path.exists(folder):
-        print(f"❌ Folder not found: {folder}")
+        print(f"ERROR: Folder not found: {folder}")
         raise RuntimeError(f"Folder not found: {folder}")
 
     xlsx_files = [
@@ -541,7 +673,7 @@ def run(folder_path: str) -> tuple[int, int]:
     ]
 
     if not xlsx_files:
-        print(f"⚠  No .xlsx files found in: {folder}")
+        print(f"ERROR: No .xlsx files found in: {folder}")
         raise RuntimeError(f"No .xlsx files found in: {folder}")
 
     tm = TokenManager()
@@ -551,30 +683,34 @@ def run(folder_path: str) -> tuple[int, int]:
 
     for file_name in xlsx_files:
         file_path = os.path.join(folder, file_name)
+
         s, fail = process_file(file_path, tm)
         total_success += s
         total_fail    += fail
 
         if fail > 0:
             file_path = rename_error(file_path)
-            print(f"\n  ⚠  Errors found — renamed to: {os.path.basename(file_path)}")
+            print(f"\n  Errors found — renamed to: {os.path.basename(file_path)}")
         elif s > 0:
             file_path = rename_restore(file_path)
 
-        print(f"\n  Load Summary {'─'*30}")
+        print(f"\n  Load Summary {'-'*30}")
         print(f"    Rows loaded : {s}")
         print(f"    Rows failed : {fail}")
-        print("    Result      :", "ALL ROWS LOADED SUCCESSFULLY ✓" if fail == 0 else "COMPLETED WITH ERRORS — fix red rows and re-run")
+        if fail == 0:
+            print("    Result      : ALL ROWS LOADED SUCCESSFULLY ✓")
+        else:
+            print("    Result      : COMPLETED WITH ERRORS — fix red rows and re-run")
 
-    print(f"\n{'═'*55}")
+    print(f"\n{'='*55}")
     print(f"  TOTAL — Success: {total_success} | Failed: {total_fail}")
-    print(f"{'═'*55}")
+    print(f"{'='*55}")
 
     return total_success, total_fail
 
 
 # =============================================================================
-# 11. ENTRY POINT
+# 10. ENTRY POINT
 # =============================================================================
 
 if __name__ == "__main__":

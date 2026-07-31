@@ -19,6 +19,8 @@
     "item": "../Data/Item",
     "supplier_item": "../Data/Supplier_Item",
     "supplier_price_list": "../Data/SupplierPriceList",
-    "price_list": "../Data/PriceList"
+    "price_list": "../Data/PriceList",
+    "product_structure": "../Data/product_structure",
+    "BOM": "../Data/BOM"
   }
 }

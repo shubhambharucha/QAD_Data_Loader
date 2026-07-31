@@ -337,6 +337,10 @@ def build_payload(row: dict, domain: str) -> dict:
                 "maximumQty":              float(val("Maximum Quantity") or 0),
                 "maxOrders":               float(val("Maximum orders") or 0),
                 "breakCategory":           val("Break category"),
+                #----- list pricing ----#
+                "maximumPrice":            float(val("Maximum Price") or 0),
+                "minimumPrice":            float(val("Minimum Price") or 0),
+                "listPrice":               float(val("List Price") or 0),
                 "dataOperation":           "C",
                 "concurrencyHash":         "",
                 "priceListId":             "",   # QAD-assigned on save, never sent by us
@@ -731,6 +735,9 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             _patch_if_present(pl, "combinationType",      row_data.get("Combination Type"), get_combination_type_code)
             _patch_if_present(pl, "maximumQty",           row_data.get("Maximum Quantity"), float)
             _patch_if_present(pl, "maxOrders",            row_data.get("Maximum orders"),   float)
+            _patch_if_present(pl, "maximumPrice",         row_data.get("Maximum Price"), float)
+            _patch_if_present(pl, "minimumPrice",         row_data.get("Minimum Price"), float)
+            _patch_if_present(pl, "listPrice",            row_data.get("List Price"), float)
             _patch_if_present(pl, "breakCategory",        row_data.get("Break category"))
 
 
