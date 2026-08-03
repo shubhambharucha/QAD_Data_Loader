@@ -1,10 +1,22 @@
 {
+  "environments": {
+    "TEST": {
+      "base_url": "http://qadee.yash.com:22010/qad-central",
+      "client_id": "82c2ddcc074402a6e1148334d89117cc",
+      "grant_type": "password"
+    },
+    "PROD": {
+      "base_url": "https://REPLACE_WITH_PROD_BASE_URL/qad-central",
+      "client_id": "REPLACE_WITH_PROD_CLIENT_ID",
+      "grant_type": "password"
+    }
+  },
   "qad": {
     "base_url": "http://qadee.yash.com:22010/qad-central",
     "auth": {
       "client_id": "82c2ddcc074402a6e1148334d89117cc",
       "username": "shubham.bharucha@yash.com",
-      "password": "Firebird!2nova",
+      "password": "REPLACE_ME",
       "grant_type": "password"
     }
   },
@@ -17,10 +29,28 @@
     "sales_order": "../Data/SalesOrder",
     "production_order": "../Data/ProductionOrder",
     "item": "../Data/Item",
+    "customer_item": "../Data/Customer_Item",
     "supplier_item": "../Data/Supplier_Item",
     "supplier_price_list": "../Data/SupplierPriceList",
     "price_list": "../Data/PriceList",
-    "product_structure": "../Data/product_structure",
     "BOM": "../Data/BOM"
+  },
+  "permissions": {
+    "entity_uri_map": {
+      "Customer": "urn:view:hybridbrowse:com.qad.erp.base.customerV2s",
+      "Supplier": "urn:view:hybridbrowse:com.qad.erp.base.supplierV2s",
+      "GCM": "",
+      "BR": "",
+      "Customer_Item": "",
+      "ProductionOrder": "",
+      "PurchaseOrder": "",
+      "SalesOrder": "",
+      "Supplier_Item": "",
+      "SupplierPriceList": "",
+      "PriceList": "",
+      "BOM": ""
+    },
+    "required_actions": ["WRITE", "CREATE", "IMPORT"],
+    "require_all": true
   }
 }

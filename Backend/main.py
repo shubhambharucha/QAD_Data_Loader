@@ -11,6 +11,9 @@ GET  /api/blank-template/entities
 GET  /api/config
 POST /api/save-config
 POST /api/test-connection
+POST /api/login              { "username": "...", "password": "...", "environment": "TEST"|"PROD" }
+GET  /api/permissions?session_id=...
+POST /api/log-activity       { "username", "environment", "action", "status", "details" }
 GET  /health
 
 
@@ -31,6 +34,41 @@ SSE event types emitted
   entity_result { entity, passed, failed, skipped }
   done          { message }
   error         { message }
+
+
+Activity log
+------------
+Every login attempt and every validate/load/fetch/template action fired from
+the frontend gets appended as one JSON object per line to
+Backend/activity_log.jsonl — e.g.:
+
+  {"timestamp": "...", "username": "jdoe", "environment": "TEST", "action": "login", "status": "success"}
+  {"timestamp": "...", "username": "jdoe", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+
+This is intentionally append-only and best-effort — a logging failure never
+blocks the actual operation.
+
+
+Sessions & QAD access tokens
+-----------------------------
+Login no longer writes the QAD OAuth token to disk (there used to be a
+token_response.json dropped in Backend/ for debugging — that's gone; delete
+any existing copy of that file, and make sure it's git-ignored). Instead,
+a successful login creates an in-memory session keyed by a random session_id,
+which is handed back to the frontend and stored in sessionStorage alongside
+the existing qad_authenticated/qad_username/qad_environment flags. The
+access token itself never leaves the server. Sessions expire after
+SESSION_TTL_SECONDS and are held only in process memory, so they don't
+survive a server restart — that's intentional for a short-lived OAuth token;
+if you need them to survive restarts/scale across workers, move SESSIONS to
+something like Redis with the same TTL semantics rather than writing tokens
+to disk.
+
+The /api/permissions endpoint uses the session's stored token to call QAD's
+qracore permissionState API once per entity (see ENTITY_URI/PERMISSIONS
+config notes near _entity_permission_config below) and reports back a
+simple {entity_id: bool} map that the frontend uses to lock/unlock module
+cards.
 """
 
 import asyncio
@@ -42,7 +80,10 @@ import os
 import re
 import shutil
 import sys
+import threading
+import time
 import traceback
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +179,12 @@ ENTITY_MAP: dict[str, dict] = {
         "folder_key":      "price_list",
         "archive_folder":  "Price_List",
     },
+    "BOM": {
+        "validate_script": "validate_bom",
+        "load_script":     "bom_load",
+        "folder_key":      "bom",
+        "archive_folder":  "BOM",
+    },
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -160,6 +207,7 @@ app.add_middleware(
 
 class OperationRequest(BaseModel):
     entities: list[str]
+    session_id: str | None = None   # used to re-check permissions server-side before running
 
 
 class FetchFilterItem(BaseModel):
@@ -178,6 +226,20 @@ class FetchPriceListRequest(BaseModel):
 class BlankTemplateRequest(BaseModel):
     entities: list[str]
 
+
+class LoginRequest(BaseModel):
+    username:    str
+    password:    str
+    environment: str   # "TEST" | "PROD"
+
+
+class ActivityLogRequest(BaseModel):
+    username:    str | None = None
+    environment: str | None = None
+    action:      str
+    status:      str | None = None
+    details:     dict | None = None
+
 # ═════════════════════════════════════════════════════════════════════════════
 # HELPERS  —  SSE
 # ═════════════════════════════════════════════════════════════════════════════
@@ -190,6 +252,67 @@ def sse(event: dict) -> str:
 def sse_comment() -> str:
     """SSE keepalive comment — prevents proxies from closing idle connections."""
     return ": keepalive\r\n\r\n"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HELPERS  —  ACTIVITY LOG
+# ═════════════════════════════════════════════════════════════════════════════
+
+ACTIVITY_LOG_PATH = os.path.join(BACKEND_DIR, "activity_log.jsonl")
+
+
+def log_activity(entry: dict) -> None:
+    """
+    Append one JSON line to activity_log.jsonl. Best-effort — a failure here
+    must never break the actual login/validate/load/fetch/template flow.
+    """
+    try:
+        record = {"timestamp": datetime.now().isoformat(timespec="seconds")}
+        record.update(entry)
+        with open(ACTIVITY_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        print(f"[main.py] Failed to write activity log: {e}")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HELPERS  —  SESSIONS (in-memory, holds the QAD OAuth token server-side only)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Nothing here ever touches disk. A session disappears on server restart or
+# after SESSION_TTL_SECONDS of age, whichever comes first. That's a deliberate
+# trade-off: the QAD access token is short-lived credential material, so the
+# safest place for it is "nowhere persistent." If you need sessions to survive
+# a restart or to be shared across multiple backend workers, swap this dict
+# for something like Redis (same key -> {username, environment, access_token,
+# created} shape, same TTL) rather than reintroducing a file on disk.
+
+SESSIONS: dict[str, dict] = {}
+SESSIONS_LOCK = threading.Lock()
+SESSION_TTL_SECONDS = 8 * 60 * 60  # 8 hours
+
+
+def _create_session(username: str, environment: str, access_token: str) -> str:
+    session_id = uuid.uuid4().hex
+    with SESSIONS_LOCK:
+        SESSIONS[session_id] = {
+            "username":     username,
+            "environment":  environment,
+            "access_token": access_token,
+            "created":      time.time(),
+        }
+    return session_id
+
+
+def _get_session(session_id: str) -> dict | None:
+    if not session_id:
+        return None
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(session_id)
+        if not s:
+            return None
+        if time.time() - s["created"] > SESSION_TTL_SECONDS:
+            del SESSIONS[session_id]
+            return None
+        return s
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HELPERS  —  PATHS & FILES
@@ -346,8 +469,9 @@ def archive_file(folder: str, filename: str, archive_dir: str) -> str:
 # VALIDATE STREAM GENERATOR
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def validate_stream(entities: list[str]) -> AsyncGenerator[str, None]:
+async def validate_stream(entities: list[str], session_id: str | None = None) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
+    perm_ctx = _resolve_permission_context(session_id)
 
     for entity_id in entities:
 
@@ -365,6 +489,11 @@ async def validate_stream(entities: list[str]) -> AsyncGenerator[str, None]:
 
         yield sse({"type": "entity_start", "entity": entity_id})
         await asyncio.sleep(0)
+
+        if not _entity_allowed(perm_ctx, entity_id):
+            yield sse({"type": "error", "message": f"Access restricted: no permission for {entity_id}"})
+            yield sse({"type": "entity_result", "entity": entity_id, "passed": 0, "failed": 0, "skipped": 0})
+            continue
 
         files = list_xlsx(folder)
 
@@ -434,8 +563,9 @@ async def validate_stream(entities: list[str]) -> AsyncGenerator[str, None]:
 # LOAD STREAM GENERATOR
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def load_stream(entities: list[str]) -> AsyncGenerator[str, None]:
+async def load_stream(entities: list[str], session_id: str | None = None) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
+    perm_ctx = _resolve_permission_context(session_id)
 
     for entity_id in entities:
 
@@ -454,6 +584,11 @@ async def load_stream(entities: list[str]) -> AsyncGenerator[str, None]:
 
         yield sse({"type": "entity_start", "entity": entity_id})
         await asyncio.sleep(0)
+
+        if not _entity_allowed(perm_ctx, entity_id):
+            yield sse({"type": "error", "message": f"Access restricted: no permission for {entity_id}"})
+            yield sse({"type": "entity_result", "entity": entity_id, "passed": 0, "failed": 0, "skipped": 0})
+            continue
 
         files = list_xlsx(folder)
 
@@ -593,26 +728,6 @@ async def load_stream(entities: list[str]) -> AsyncGenerator[str, None]:
 # ═════════════════════════════════════════════════════════════════════════════
 # FETCH  —  Price List extraction from QAD (Scripts/fetch_price_lists.py)
 # ═════════════════════════════════════════════════════════════════════════════
-#
-# Contract for Scripts/fetch_price_lists.py:
-#
-#   def fetch(filters: list[dict], output_path: str) -> dict:
-#       ...
-#       return {"ok": True, "rows": 123, "message": "Extraction successful"}
-#
-# If the script also defines a TokenManager class (same pattern as the other
-# load scripts), main.py will instantiate/reuse it and call instead:
-#
-#   def fetch(filters: list[dict], output_path: str, tm) -> dict:
-#       ...
-#
-# `filters` is a list of dicts shaped like:
-#   {"field": "price_list", "operator": "equals", "value_from": "STD", "value_to": None}
-#
-# Downloads-only: no directory is ever accepted from the client. The output
-# path is always <user's Downloads>/<filename>.xlsx, resolved server-side.
-# This is a plain request/response call (no SSE) — the frontend shows a
-# single success/failure summary once the extraction finishes.
 
 @app.post("/api/fetch-price-list")
 async def api_fetch_price_list(req: FetchPriceListRequest):
@@ -660,23 +775,9 @@ async def api_fetch_price_list(req: FetchPriceListRequest):
 # ═════════════════════════════════════════════════════════════════════════════
 # BLANK TEMPLATE  —  headers-only workbook(s), streamed straight to the browser
 # ═════════════════════════════════════════════════════════════════════════════
-#
-# Deliberately NOT written to any server-side folder (unlike fetch above).
-# The file is built in memory and returned as a normal HTTP attachment, so it
-# is the *browser* — not this server — that decides where it lands on disk.
-# That makes it work the same way regardless of what machine the backend is
-# running on, or what OS the person using the tool is on.
-#
-#   - 1 entity selected  → returns that entity's .xlsx directly.
-#   - 2+ entities selected → returns a .zip containing one .xlsx per entity.
 
 @app.get("/api/blank-template/entities")
 def api_blank_template_entities():
-    """
-    Which entities Scripts/blank_template.py currently knows how to build a
-    template for. index.html calls this to decide which selections enable
-    the Blank Template button, instead of hardcoding the list on the frontend.
-    """
     try:
         mod = load_module("blank_template")
         return {"ok": True, "entities": mod.supported_entities()}
@@ -828,6 +929,228 @@ def api_test_connection():
         return {"ok": False, "error": str(e)}
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LOGIN  —  live OAuth check against the selected environment
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Takes username/password straight from the login form and performs a live
+# OAuth token request against config.json's environments[<environment>]
+# (base_url + client_id). The resulting access token is kept ONLY in the
+# in-memory SESSIONS store (see above) — nothing is written to disk anymore.
+# The frontend gets back a session_id, which it stores in sessionStorage and
+# sends along on later calls that need the token server-side (currently just
+# /api/permissions). Access gating on the frontend is still the lightweight
+# sessionStorage flag set only after this endpoint returns ok: true.
+
+@app.post("/api/login")
+def api_login(req: LoginRequest):
+    username    = req.username.strip()
+    environment = req.environment.strip().upper()
+
+    try:
+        cfg          = _read_config_file()
+        environments = cfg.get("environments", {})
+        env_cfg      = environments.get(environment)
+
+        if not env_cfg:
+            log_activity({
+                "username": username, "environment": environment,
+                "action": "login", "status": "failed",
+                "details": {"error": f"Unknown environment '{environment}'"},
+            })
+            return {"ok": False, "error": f"Unknown environment '{environment}'"}
+
+        import requests as req_lib
+        url = f"{env_cfg['base_url']}/oauth/token"
+        payload = {
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   req.password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        }
+
+        resp = req_lib.post(url, data=payload, timeout=10)
+        resp.raise_for_status()
+
+        oauth_response = resp.json()
+        token = oauth_response.get("access_token")
+
+        if not token:
+            log_activity({
+                "username": username, "environment": environment,
+                "action": "login", "status": "failed",
+                "details": {"error": "No access_token in response"},
+            })
+            return {"ok": False, "error": "No access_token in response"}
+
+        session_id = _create_session(username, environment, token)
+
+        log_activity({
+            "username": username, "environment": environment,
+            "action": "login", "status": "success",
+        })
+        return {
+            "ok": True,
+            "message": "Login successful",
+            "username": username,
+            "environment": environment,
+            "session_id": session_id,
+        }
+
+    except Exception as e:
+        log_activity({
+            "username": username, "environment": environment,
+            "action": "login", "status": "failed",
+            "details": {"error": str(e)},
+        })
+        return {"ok": False, "error": str(e)}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PERMISSIONS  —  QAD access-based module control
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# config.json is expected to grow a "permissions" section shaped like:
+#
+#   "permissions": {
+#     "entity_uri_map": {
+#       "Customer": "urn:view:hybridbrowse:com.qad.erp.base.customerV2s"
+#       // ... one urn per ENTITY_MAP key ...
+#     },
+#     "required_actions": ["WRITE", "CREATE", "IMPORT"],
+#     "require_all": true
+#   }
+#
+# Per your call: the qracore host is NOT a separate config value — it's
+# always environments[<environment>].base_url, the same base_url already
+# used for the OAuth token request at login, so it moves automatically if
+# TEST/PROD base_url ever changes in config.json. No extra field needed.
+#
+# require_all=true means a module only unlocks if EVERY action in
+# required_actions comes back hasPermission:true (confirmed).
+#
+# Enforcement happens in TWO places now (re-check confirmed as the safer
+# option):
+#   1. GET /api/permissions — called on page load AND again before every
+#      Validate/Load click, purely to drive the UI lock state.
+#   2. Inside validate_stream/load_stream themselves — re-checked per
+#      entity right before that entity is processed, so a stale/tampered
+#      frontend can't bypass the lock by just not calling /api/permissions
+#      or by re-enabling a disabled button via devtools.
+#
+# Behavior when config (or an entity's URI) is missing: we do NOT lock the
+# module — permission checks are opt-in per entity, so partially-rolled-out
+# config never blocks modules that haven't been wired up yet. If the
+# permissionState call itself fails for an entity that DOES have a URI
+# configured, we fail closed (treat as no permission).
+
+def _entity_permission_config() -> tuple[dict, list[str], bool]:
+    cfg = _read_config_file()
+    perm_cfg = cfg.get("permissions", {})
+    uri_map = perm_cfg.get("entity_uri_map", {})
+    actions = perm_cfg.get("required_actions", ["WRITE", "CREATE", "IMPORT"])
+    require_all = perm_cfg.get("require_all", True)
+    return uri_map, actions, require_all
+
+
+def _qracore_base_url(environment: str) -> str | None:
+    """Same host QAD OAuth uses for this environment — read fresh every
+    call so a config.json edit takes effect on the next check, no restart
+    needed."""
+    cfg = _read_config_file()
+    base_url = cfg.get("environments", {}).get(environment, {}).get("base_url")
+    return base_url.rstrip("/") if base_url else None
+
+
+def _check_entity_permission(
+    base_url: str, token: str, uri: str, actions: list[str], require_all: bool
+) -> bool:
+    import requests as req_lib
+    results = []
+    for action in actions:
+        try:
+            resp = req_lib.get(
+                f"{base_url}/api/qracore/permissionState",
+                params={"uri": uri, "action": action},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            has_perm = bool(resp.json().get("data", {}).get("hasPermission"))
+        except Exception as e:
+            print(f"[main.py] permissionState check failed (uri={uri}, action={action}): {e}")
+            has_perm = False
+        results.append(has_perm)
+    return all(results) if require_all else any(results)
+
+
+class _PermissionContext:
+    """Bundles what's needed to check a single entity's permission, resolved
+    once per request/stream rather than re-reading config.json per entity."""
+    def __init__(self, active: bool, base_url: str | None, token: str | None,
+                 uri_map: dict, actions: list[str], require_all: bool):
+        self.active      = active
+        self.base_url    = base_url
+        self.token       = token
+        self.uri_map     = uri_map
+        self.actions     = actions
+        self.require_all = require_all
+
+
+def _resolve_permission_context(session_id: str | None) -> _PermissionContext:
+    uri_map, actions, require_all = _entity_permission_config()
+    if not uri_map:
+        return _PermissionContext(False, None, None, uri_map, actions, require_all)
+
+    session = _get_session(session_id) if session_id else None
+    if not session:
+        # No/expired session — can't call QAD on the user's behalf. Since
+        # permissions ARE configured, fail closed rather than silently
+        # letting an unauthenticated stream run.
+        return _PermissionContext(True, None, None, uri_map, actions, require_all)
+
+    base_url = _qracore_base_url(session["environment"])
+    return _PermissionContext(True, base_url, session["access_token"], uri_map, actions, require_all)
+
+
+def _entity_allowed(ctx: _PermissionContext, entity_id: str) -> bool:
+    if not ctx.active:
+        return True  # permissions not configured at all -> never lock
+    uri = ctx.uri_map.get(entity_id)
+    if not uri:
+        return True  # this entity has no URI configured -> don't lock it
+    if not ctx.base_url or not ctx.token:
+        return False  # configured but we have no way to check -> fail closed
+    return _check_entity_permission(ctx.base_url, ctx.token, uri, ctx.actions, ctx.require_all)
+
+
+@app.get("/api/permissions")
+def api_permissions(session_id: str):
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired or invalid — please log in again.")
+
+    ctx = _resolve_permission_context(session_id)
+    if not ctx.active:
+        return {"ok": True, "configured": False, "permissions": {eid: True for eid in ENTITY_MAP}}
+
+    permissions = {eid: _entity_allowed(ctx, eid) for eid in ENTITY_MAP}
+    return {"ok": True, "configured": True, "permissions": permissions}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ACTIVITY LOG  —  generic logging endpoint for workspace actions
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/log-activity")
+def api_log_activity(req: ActivityLogRequest):
+    log_activity({
+        "username":    req.username,
+        "environment": req.environment,
+        "action":      req.action,
+        "status":      req.status,
+        "details":     req.details,
+    })
+    return {"ok": True}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ROUTES  —  validate / load
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -841,7 +1164,7 @@ SSE_HEADERS = {
 @app.post("/api/validate")
 async def api_validate(req: OperationRequest):
     return StreamingResponse(
-        validate_stream(req.entities),
+        validate_stream(req.entities, req.session_id),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -850,7 +1173,7 @@ async def api_validate(req: OperationRequest):
 @app.post("/api/load")
 async def api_load(req: OperationRequest):
     return StreamingResponse(
-        load_stream(req.entities),
+        load_stream(req.entities, req.session_id),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )

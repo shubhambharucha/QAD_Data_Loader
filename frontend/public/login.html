@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Login — QAD Data Loader</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#0a0510;
+  color:#f8f8f8;
+  font-family:'Inter',sans-serif;
+  min-height:100vh;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+:root{
+  --accent:#8b5cf6;
+  --accent-bright:#a78bfa;
+  --accent-dim:rgba(139,92,246,.08);
+  --accent-border:rgba(139,92,246,.28);
+  --accent-glow:rgba(139,92,246,.32);
+  --green:#00e676;
+  --red:#dc5050;
+  --red-dim:rgba(220,80,80,.08);
+  --red-border:rgba(220,80,80,.25);
+  --muted2:#706e82;
+  --border:rgba(255,255,255,.07);
+  --mono:'DM Mono',monospace;
+}
+
+/* ── BACKGROUND (glow increased) ── */
+#grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+#grid-bg svg{width:100%;height:100%;animation:grid-pulse 5s ease-in-out infinite;}
+@keyframes grid-pulse{0%,100%{opacity:.42}50%{opacity:1}}
+#grid-bg::after{
+  content:'';position:absolute;left:28%;top:45%;transform:translate(-50%,-50%);
+  width:1100px;height:900px;
+  background:radial-gradient(ellipse at center,rgba(139,92,246,.24) 0%,rgba(139,92,246,.12) 38%,rgba(99,102,241,.07) 58%,transparent 76%);
+  pointer-events:none;animation:bloom 7s ease-in-out infinite;
+}
+@keyframes bloom{0%,100%{opacity:.65;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.14)}}
+
+/* ── PAGE LAYOUT ── */
+.logo-corner{
+  position:fixed;
+  top:28px;left:48px;
+  z-index:10;
+}
+.brand-logo{
+  height:72px;
+  width:auto;
+  max-width:100%;
+  object-fit:contain;
+  filter:drop-shadow(0 0 24px rgba(139,92,246,.35));
+}
+
+.page-outer{
+  position:relative;z-index:1;
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:60px 24px;
+}
+
+.content-block{
+  width:100%;
+  max-width:440px;
+}
+
+.brand-block{
+  margin-bottom:72px;   /* ← the considerable gap before the form starts */
+}
+
+.page-title{
+  font-size:clamp(34px,4.8vw,54px);
+  font-weight:700;
+  letter-spacing:-.03em;
+  line-height:1.05;
+  color:#fff;
+  text-align:left;
+}
+
+.form-block{
+  display:flex;
+  flex-direction:column;
+  gap:20px;
+}
+
+/* ── RIGHT COLUMN — placeholder for a future component ── */
+.right-col{
+  height:100%;
+  min-height:420px;
+}
+
+/* ── FORM ── */
+form{display:flex;flex-direction:column;gap:20px;}
+
+.field label{
+  display:block;
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--accent);
+  opacity:.85;
+  margin-bottom:8px;
+}
+
+input[type=text],input[type=password]{
+  width:100%;
+  background:rgba(255,255,255,.03);
+  border:1px solid var(--accent-border);
+  border-radius:6px;
+  color:#fff;
+  font-family:var(--mono);font-size:14px;
+  padding:13px 16px;
+  outline:none;
+  box-shadow:0 0 14px rgba(139,92,246,.14), inset 0 0 10px rgba(139,92,246,.04);
+  transition:border-color .2s, box-shadow .2s;
+}
+input[type=text]::placeholder,input[type=password]::placeholder{color:var(--accent);opacity:.35;}
+input[type=text]:focus,input[type=password]:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(139,92,246,.12), 0 0 26px rgba(139,92,246,.4);
+}
+
+/* ── CUSTOM DROPDOWN (replaces native <select> so no browser default
+     white/grey option list can leak through) ── */
+.dropdown{position:relative;}
+.dropdown-btn{
+  width:100%;
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(255,255,255,.03);
+  border:1px solid var(--accent-border);
+  border-radius:6px;
+  color:#fff;
+  font-family:var(--mono);font-size:14px;
+  padding:13px 16px;
+  cursor:pointer;
+  outline:none;
+  box-shadow:0 0 14px rgba(139,92,246,.14), inset 0 0 10px rgba(139,92,246,.04);
+  transition:border-color .2s, box-shadow .2s;
+}
+.dropdown-btn:hover,.dropdown-btn.open{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(139,92,246,.12), 0 0 26px rgba(139,92,246,.4);
+}
+.dropdown-btn .chev{
+  width:10px;height:6px;
+  stroke:var(--accent);stroke-width:1.6;fill:none;
+  stroke-linecap:round;stroke-linejoin:round;
+  transition:transform .2s;
+  flex-shrink:0;
+}
+.dropdown-btn.open .chev{transform:rotate(180deg);}
+
+.dropdown-list{
+  position:absolute;
+  top:calc(100% + 8px);
+  left:0;right:0;
+  background:#0e0818;
+  border:1px solid var(--accent-border);
+  border-radius:6px;
+  overflow:hidden;
+  box-shadow:0 8px 30px rgba(0,0,0,.5), 0 0 26px rgba(139,92,246,.3);
+  z-index:20;
+  display:none;
+}
+.dropdown-list.open{display:block;}
+
+.dropdown-option{
+  padding:12px 16px;
+  font-family:var(--mono);font-size:14px;
+  color:#fff;
+  cursor:pointer;
+  transition:background .15s, color .15s;
+}
+.dropdown-option:hover{background:var(--accent-dim);color:var(--accent-bright);}
+.dropdown-option.selected{background:rgba(139,92,246,.14);color:var(--accent-bright);}
+.dropdown-option + .dropdown-option{border-top:1px solid rgba(255,255,255,.05);}
+
+/* ── LOGIN BUTTON ── */
+.btn-login{
+  width:100%;
+  font-family:var(--mono);font-size:13px;
+  letter-spacing:.08em;text-transform:uppercase;
+  padding:14px;
+  border-radius:6px;
+  cursor:pointer;
+  background:var(--accent);
+  color:#0a0510;
+  font-weight:600;
+  border:1px solid var(--accent);
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  margin-top:4px;
+  transition:all .2s;
+}
+.btn-login:hover:not(:disabled){
+  background:var(--accent-bright);
+  box-shadow:0 0 30px var(--accent-glow);
+}
+.btn-login:disabled{opacity:.5;cursor:not-allowed;}
+
+.spin{
+  width:13px;height:13px;
+  border:1.5px solid rgba(0,0,0,.2);
+  border-top-color:#0a0510;
+  border-radius:50%;
+  animation:spin .6s linear infinite;
+  display:none;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+#login-error{
+  display:none;
+  align-items:center;gap:8px;
+  background:var(--red-dim);
+  border:1px solid var(--red-border);
+  color:var(--red);
+  font-family:var(--mono);font-size:12px;
+  padding:11px 16px;
+  border-radius:6px;
+}
+.err-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+
+.footnote{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--muted2);
+}
+
+@media(max-width:900px){
+  .page-outer{padding:120px 24px 48px;}
+  .logo-corner{top:20px;left:24px;}
+  .brand-logo{height:56px;}
+}
+</style>
+</head>
+<body>
+
+<div id="grid-bg">
+  <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none">
+    <defs>
+      <pattern id="smallgrid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(139,92,246,0.08)" stroke-width="0.5"/>
+      </pattern>
+      <pattern id="grid" width="200" height="200" patternUnits="userSpaceOnUse">
+        <rect width="200" height="200" fill="url(#smallgrid)"/>
+        <path d="M 200 0 L 0 0 0 200" fill="none" stroke="rgba(139,92,246,0.14)" stroke-width="1"/>
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#grid)"/>
+  </svg>
+</div>
+
+<div class="logo-corner">
+  <img class="brand-logo" src="logo.png" alt="Yash Technologies"/>
+</div>
+
+<div class="page-outer">
+
+  <div class="content-block">
+
+    <div class="brand-block">
+      <h1 class="page-title">QAD Data Loader</h1>
+    </div>
+
+    <div class="form-block">
+      <div id="login-error"><div class="err-dot"></div><span id="login-error-msg"></span></div>
+
+      <form id="login-form" autocomplete="off">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" autocomplete="username" required/>
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" autocomplete="current-password" required/>
+        </div>
+
+        <div class="field">
+          <label>Environment</label>
+          <div class="dropdown" id="env-dropdown">
+            <button type="button" class="dropdown-btn" id="env-btn">
+              <span id="env-value">TEST</span>
+              <svg class="chev" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4"/></svg>
+            </button>
+            <div class="dropdown-list" id="env-list">
+              <div class="dropdown-option selected" data-value="TEST">TEST</div>
+              <div class="dropdown-option" data-value="PROD">PROD</div>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-login" id="btn-login">
+          <span class="spin" id="spin-login"></span>
+          <span id="btn-login-text">Login</span>
+        </button>
+      </form>
+
+      <div class="footnote">QAD Data Loader</div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+
+/* ── CUSTOM DROPDOWN ── */
+const envBtn   = document.getElementById('env-btn');
+const envList  = document.getElementById('env-list');
+const envValue = document.getElementById('env-value');
+let selectedEnvironment = 'TEST';
+
+envBtn.addEventListener('click', () => {
+  const open = envList.classList.toggle('open');
+  envBtn.classList.toggle('open', open);
+});
+
+envList.querySelectorAll('.dropdown-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    envList.querySelectorAll('.dropdown-option').forEach(o => o.classList.remove('selected'));
+    opt.classList.add('selected');
+    selectedEnvironment = opt.dataset.value;
+    envValue.textContent = selectedEnvironment;
+    envList.classList.remove('open');
+    envBtn.classList.remove('open');
+  });
+});
+
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('env-dropdown').contains(e.target)) {
+    envList.classList.remove('open');
+    envBtn.classList.remove('open');
+  }
+});
+
+/* ── LOGIN FORM ── */
+const form      = document.getElementById('login-form');
+const btn       = document.getElementById('btn-login');
+const btnText   = document.getElementById('btn-login-text');
+const spinner   = document.getElementById('spin-login');
+const errorBox  = document.getElementById('login-error');
+const errorMsg  = document.getElementById('login-error-msg');
+
+function showError(msg){
+  errorMsg.textContent = msg;
+  errorBox.style.display = 'flex';
+}
+function hideError(){
+  errorBox.style.display = 'none';
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideError();
+
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  if(!username || !password){
+    showError('Enter both username and password.');
+    return;
+  }
+
+  btn.disabled = true;
+  spinner.style.display = '';
+  btnText.textContent = 'Verifying...';
+
+  try{
+    const res = await fetch(`${API}/api/login`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ username, password, environment: selectedEnvironment })
+    });
+    const data = await res.json();
+
+    if(data.ok){
+      sessionStorage.setItem('qad_authenticated', 'true');
+      sessionStorage.setItem('qad_username', username);
+      sessionStorage.setItem('qad_environment', selectedEnvironment);
+      sessionStorage.setItem('qad_session_id', data.session_id || '');
+      btnText.textContent = 'Success — redirecting...';
+      window.location.href = '/workspace.html';
+      return;
+    } else {
+      showError(data.error || 'Login failed — check your credentials.');
+    }
+  } catch(err){
+    showError('Backend not reachable — is main.py running?');
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    btnText.textContent = 'Login';
+  }
+});
+
+if(window.matchMedia('(prefers-reduced-motion:reduce)').matches){
+  document.getElementById('grid-bg').style.animation = 'none';
+}
+</script>
+</body>
+</html>
