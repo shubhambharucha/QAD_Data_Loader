@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import Header from "./components/Header";
-import EntityGrid from "./components/EntityGrid";
-import ActionButtons from "./components/ActionButtons";
-import ResultsTable from "./components/ResultsTable";
-import BackgroundLines from "./components/BackgroundLines";
+import Header from "./Components/Header";
+import EntityGrid from "./Components/EntityGrid";
+import ActionButtons from "./Components/ActionButtons";
+import ResultsTable from "./Components/ResultsTable";
+import BackgroundLines from "./Components/BackgroundLines";
 import "./App.css";
 
 const ENTITIES = [
