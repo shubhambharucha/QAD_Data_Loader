@@ -11,15 +11,6 @@
       "grant_type": "password"
     }
   },
-  "qad": {
-    "base_url": "http://qadee.yash.com:22010/qad-central",
-    "auth": {
-      "client_id": "82c2ddcc074402a6e1148334d89117cc",
-      "username": "shubham.bharucha@yash.com",
-      "password": "REPLACE_ME",
-      "grant_type": "password"
-    }
-  },
   "folders": {
     "BR": "../Data/BR",
     "GCM": "../Data/GCM",

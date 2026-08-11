@@ -20,3 +20,32 @@
 {"timestamp": "2026-08-03T17:19:15", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "failed", "details": {"entities": ["PriceList"], "error": "Template generation failed: TEMPLATE_SPECS['PriceList'] groups/columns width mismatch"}}
 {"timestamp": "2026-08-03T17:37:14", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
 {"timestamp": "2026-08-03T17:44:08", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T10:59:17", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T11:00:18", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-08-11T12:21:55", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T12:23:30", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-08-11T12:46:01", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:30:35", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "400 Client Error:  for url: http://qadee.yash.com:22010/qad-central/oauth/token"}}
+{"timestamp": "2026-08-11T14:30:43", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:31:43", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:33:11", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:33:21", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-08-11T14:33:44", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:35:44", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-08-11T14:38:41", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:38:51", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-08-11T14:55:32", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:55:35", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-08-11T14:56:55", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T14:56:58", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-08-11T14:57:03", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-08-11T14:59:08", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-08-11T14:59:26", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T16:47:25", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T17:18:32", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T17:20:05", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T17:21:15", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "400 Client Error:  for url: http://qadee.yash.com:22010/qad-central/oauth/token"}}
+{"timestamp": "2026-08-11T17:21:28", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T17:27:23", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-08-11T17:40:42", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-08-11T17:40:52", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}

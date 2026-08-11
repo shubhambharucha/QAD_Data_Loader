@@ -2,18 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<script>
   /* ── ACCESS GATE ──
-     Lightweight session check: only reachable if /api/login returned ok:true
-     on the login page. This is client-side only (no server session yet) —
-     it stops accidental access, not a determined bypass. Runs before the
-     rest of <head>/<body> so there's no flash of the workspace UI. */
-  (function(){
-    if (sessionStorage.getItem('qad_authenticated') !== 'true') {
-      window.location.href = '/login.html';
-    }
-  })();
-</script>
+<script src="/services/session.js"></script>
+<script src ="/services/authGuard.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>QAD Data Loader — Workspace</title>
 <link rel="icon" type="image/png" href="public/logo.png">
@@ -287,24 +278,22 @@ table.rt tr:hover td{background:rgba(255,255,255,.015)}
   <div style="font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted2);">QAD Data Loader</div>
 </footer>
 
+<script src="/services/api.js"></script>
+<script src="/services/session.js"></script>
+
 <script>
 
-const API = 'http://localhost:8000';
-
 /* ── SESSION / LOGGING ── */
-const SESSION_USER = sessionStorage.getItem('qad_username')    || '';
-const SESSION_ENV   = sessionStorage.getItem('qad_environment') || '';
-const SESSION_ID    = sessionStorage.getItem('qad_session_id')  || '';
+const SESSION_USER = Session.getUsername() || '';
+const SESSION_ENV   = Session.getEnvironment() || '';
+const SESSION_ID    = Session.getSessionId() || '';
 
 document.getElementById('nav-user').textContent = SESSION_USER ? `${SESSION_USER} · ${SESSION_ENV}` : '';
 
 document.getElementById('btn-logout').addEventListener('click', () => {
   logActivity('logout', 'success');
-  sessionStorage.removeItem('qad_authenticated');
-  sessionStorage.removeItem('qad_username');
-  sessionStorage.removeItem('qad_environment');
-  sessionStorage.removeItem('qad_session_id');
-  window.location.href = '/login.html';
+  Session.clear();
+  window.location.href = '/';
 });
 
 /* Best-effort activity logging — never blocks the actual operation. */
@@ -705,7 +694,7 @@ document.getElementById('btn-f').addEventListener('click',()=>{
   if(b.disabled)return;
   b.classList.add('burst');
   logActivity('fetch', 'navigated');
-  window.location.href='/price_list_fetch.html';
+  window.location.href='/fetch/price_list_fetch.html';
 });
 
 /* ── BLANK TEMPLATE (Supplier, Customer, Price List) ──

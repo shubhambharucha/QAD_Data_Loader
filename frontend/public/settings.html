@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
+<script src="/services/session.js"></script>
+<script src="/services/authGuard.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Settings — QAD Data Loader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -271,12 +273,12 @@ input.path-field:focus{
 
 <!-- NAV -->
 <nav id="nav">
-  <a href="/" class="nav-back">
+  <a href="/workspace.html" class="nav-back">
     <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
-    Back to Loader
+    Back to Workspace
   </a>
   <span class="nav-title">Settings</span>
-  <a href="/" class="nav-logo">
+  <a href="/workspace.html" class="nav-logo">
     <img src="/logo.png" alt="Yash Technologies"/>
   </a>
 </nav>
@@ -285,47 +287,12 @@ input.path-field:focus{
 <div class="page">
 
   <div class="page-hdr">
-    <h1>Configuration</h1>
+    <h1>Folder Configuration</h1>
   </div>
 
-  <!-- ── SECTION 1: OAuth / QAD Connection ── -->
+  <!-- ── SECTION: Folder Paths ── -->
   <div class="section">
-    <div class="section-label">QAD Connection</div>
-
-    <div class="field">
-      <label>Base URL</label>
-      <span class="hint">The root URL of your QAD Cloud ERP instance</span>
-      <input type="url" id="base_url"/>
-    </div>
-
-    <div class="field">
-      <label>Client ID</label>
-      <span class="hint">OAuth2 client_id for API access</span>
-      <input type="text" id="client_id"/>
-    </div>
-
-    <div class="field">
-      <label>Username</label>
-      <input type="text" id="username"/>
-    </div>
-
-    <div class="field">
-      <label>Password</label>
-      <input type="password" id="password"/>
-    </div>
-
-    <div class="field">
-      <label>Grant Type</label>
-      <span class="hint">Usually "password" — do not change unless instructed</span>
-      <input type="text" id="grant_type"/>
-    </div>
-  </div>
-
-  <hr class="sect-divider"/>
-
-  <!-- ── SECTION 2: Folder Paths ── -->
-  <div class="section">
-    <div class="section-label">Data Folder Paths</div>
+    <div class="section-label">Folder Paths</div>
 
     <div class="folders-grid" id="folders-grid">
       <!-- Injected by JS -->
@@ -334,10 +301,6 @@ input.path-field:focus{
 
   <!-- ── ACTION BAR ── -->
   <div class="action-bar">
-    <button class="btn btn-ghost" id="btn-test" onclick="testConnection()">
-      <span class="spin" id="spin-test"></span>
-      Test Connection
-    </button>
     <button class="btn btn-primary" id="btn-save" onclick="saveConfig()">
       <span class="spin" id="spin-save"></span>
       Save Settings
@@ -350,11 +313,9 @@ input.path-field:focus{
 
 </div>
 
+<script src="/services/api.js"></script>
+
 <script>
-
-//if deploy backend, update this
-const API = 'http://localhost:8000';
-
 // ── Folder definitions ──────────────────────────────────────────────────────
 // label shown in UI → config.json key
 const FOLDER_DEFS = [
@@ -394,12 +355,6 @@ async function loadConfig() {
 
     const cfg = data.config;
 
-    document.getElementById('base_url').value   = cfg?.qad?.base_url              || '';
-    document.getElementById('client_id').value  = cfg?.qad?.auth?.client_id       || '';
-    document.getElementById('username').value   = cfg?.qad?.auth?.username        || '';
-    document.getElementById('password').value   = cfg?.qad?.auth?.password        || '';
-    document.getElementById('grant_type').value = cfg?.qad?.auth?.grant_type      || 'password';
-
     const folders = cfg?.folders || {};
     FOLDER_DEFS.forEach(f => {
       const el = document.getElementById('folder_' + f.key);
@@ -426,11 +381,6 @@ async function saveConfig() {
   });
 
   const payload = {
-    base_url:   document.getElementById('base_url').value.trim(),
-    client_id:  document.getElementById('client_id').value.trim(),
-    username:   document.getElementById('username').value.trim(),
-    password:   document.getElementById('password').value.trim(),
-    grant_type: document.getElementById('grant_type').value.trim() || 'password',
     folders,
   };
 
@@ -444,27 +394,6 @@ async function saveConfig() {
     showToast(data.ok ? 'Settings saved successfully' : data.error, data.ok);
   } catch(e) {
     showToast('Save failed — ' + e.message, false);
-  } finally {
-    btn.disabled = false;
-    spin.style.display = 'none';
-  }
-}
-
-// ── Test connection ─────────────────────────────────────────────────────────
-async function testConnection() {
-  const btn  = document.getElementById('btn-test');
-  const spin = document.getElementById('spin-test');
-
-  btn.disabled = true;
-  spin.style.display = '';
-  showToast('Testing connection...', true);
-
-  try {
-    const res  = await fetch(`${API}/api/test-connection`, { method: 'POST' });
-    const data = await res.json();
-    showToast(data.ok ? data.message : data.error, data.ok);
-  } catch(e) {
-    showToast('Test failed — ' + e.message, false);
   } finally {
     btn.disabled = false;
     spin.style.display = 'none';
