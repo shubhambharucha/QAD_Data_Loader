@@ -221,6 +221,7 @@ class FetchFilterItem(BaseModel):
 class FetchPriceListRequest(BaseModel):
     filters:  list[FetchFilterItem] = []
     filename: str
+    session_id: str | None = None
 
 
 class BlankTemplateRequest(BaseModel):
@@ -567,6 +568,14 @@ async def load_stream(entities: list[str], session_id: str | None = None) -> Asy
     loop = asyncio.get_event_loop()
     perm_ctx = _resolve_permission_context(session_id)
 
+    session = _get_session(session_id)
+    if not session:
+        yield sse({"type": "error", "message": "Session expired or invalid - please log in again"})
+        yield sse({"type": "done", "message": "Load aborted: no active session"})
+        return
+
+    session_token = session["access_token"]
+    session_base_url = _qracore_base_url(session["environment"])
     for entity_id in entities:
 
         if entity_id not in ENTITY_MAP:
@@ -623,7 +632,7 @@ async def load_stream(entities: list[str], session_id: str | None = None) -> Asy
                     if hasattr(mod, "_tm"):
                         tm = mod._tm
                     else:
-                        tm = mod.TokenManager()
+                        tm = mod.TokenManager(token=session_token, base_url=session_base_url)
                         mod._tm = tm
 
                     ok, fail = mod.process_file(file_path, tm)
@@ -731,6 +740,13 @@ async def load_stream(entities: list[str], session_id: str | None = None) -> Asy
 
 @app.post("/api/fetch-price-list")
 async def api_fetch_price_list(req: FetchPriceListRequest):
+    session = _get_session(req.session_id)
+    if not session:
+        return {
+            "ok": False,
+            "message": "Session expired or invalid - please log in again",
+        }
+    
     filename = _generate_filename("PriceList", req.filename.strip())
 
     out_dir = resolve_downloads_folder()
@@ -741,22 +757,23 @@ async def api_fetch_price_list(req: FetchPriceListRequest):
     loop = asyncio.get_event_loop()
 
     def _run_fetch() -> dict:
+        session = _get_session(req.session_id)
+        if not session:
+            return {"ok": False, "message": "Session expired or invalid - please log in again"}
+
+        session_token = session["access_token"]
+        session_base_url = _qracore_base_url(session["environment"])
+
         try:
             mod = load_module("fetch_price_lists")
         except Exception as e:
             return {"ok": False, "message": f"Cannot load fetch_price_lists: {e}"}
 
         try:
-            if hasattr(mod, "TokenManager"):
-                if hasattr(mod, "_tm"):
-                    tm = mod._tm
-                else:
-                    tm = mod.TokenManager()
-                    mod._tm = tm
-                result = mod.fetch(filters_payload, output_path, tm)
-            else:
-                result = mod.fetch(filters_payload, output_path)
+            tm = mod.TokenManager(token=session_token, base_url=session_base_url)
+            result = mod.fetch(filters_payload, output_path, tm)
             return result
+        
         except Exception as exc:
             traceback.print_exc()
             return {"ok": False, "message": str(exc)}
@@ -874,11 +891,6 @@ def _reload_config():
 
 
 class SaveConfigRequest(BaseModel):
-    base_url:   str
-    client_id:  str
-    username:   str
-    password:   str
-    grant_type: str
     folders:    dict   # { key: path }
 
 
@@ -895,13 +907,6 @@ def api_get_config():
 def api_save_config(req: SaveConfigRequest):
     try:
         data = _read_config_file()
-
-        data["qad"]["base_url"]           = req.base_url.strip()
-        data["qad"]["auth"]["client_id"]  = req.client_id.strip()
-        data["qad"]["auth"]["username"]   = req.username.strip()
-        data["qad"]["auth"]["password"]   = req.password.strip()
-        data["qad"]["auth"]["grant_type"] = req.grant_type.strip()
-
         for key, path in req.folders.items():
             if path.strip():
                 data["folders"][key] = path.strip()
@@ -1063,6 +1068,10 @@ def _qracore_base_url(environment: str) -> str | None:
 def _check_entity_permission(
     base_url: str, token: str, uri: str, actions: list[str], require_all: bool
 ) -> bool:
+    print(f"[PERMISSION] "
+          f"uri={uri}"
+          f"actions={actions}")
+          #f"response={resp.json()}")
     import requests as req_lib
     results = []
     for action in actions:

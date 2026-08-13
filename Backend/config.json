@@ -14,7 +14,7 @@
   "folders": {
     "BR": "../Data/BR",
     "GCM": "../Data/GCM",
-    "supplier": "../Data/Supplier",
+    "supplier": "D:\\QAD_data_loader\\Data\\Supplier",
     "customer": "../Data/Customer",
     "purchase_order": "../Data/PurchaseOrder",
     "sales_order": "../Data/SalesOrder",
@@ -41,7 +41,11 @@
       "PriceList": "",
       "BOM": ""
     },
-    "required_actions": ["WRITE", "CREATE", "IMPORT"],
+    "required_actions": [
+      "WRITE",
+      "CREATE",
+      "IMPORT"
+    ],
     "require_all": true
   }
 }

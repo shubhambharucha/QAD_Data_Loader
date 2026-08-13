@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
+<script src="/services/api.js"></script>
 <script src="/services/session.js"></script>
 <script src="/services/authGuard.js"></script>
+<script src="/services/fetchService.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Price List - Data Extraction</title>
 <link rel="icon" type="image/png" href="/logo.png">
@@ -253,8 +255,6 @@ input::placeholder{color:var(--muted2);}
   <div style="font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted2);">QAD Data Loader</div>
 </footer>
 
-<script src="/services/api.js"></script>
-
 <script>
 /* ── CURSOR (same behavior as index.html) ── */
 const cur=document.getElementById('cur');
@@ -480,10 +480,10 @@ btnRun.addEventListener('click',async()=>{
 
   let result=null;
   try{
-    const res=await fetch(`${API}/api/fetch-price-list`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({filters,filename})
+    const res = await FetchService.fetchPriceList({
+      session_id: Session.getSessionId(),
+      filename,
+      filters
     });
     result=await res.json();
   }catch(e){

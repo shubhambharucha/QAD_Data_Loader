@@ -55,6 +55,19 @@ black, and every cell (header + data) gets a thin all-around border.
 LOCKED_ON_UPDATE is kept only as a reference of which fields
 price_list_load.py itself treats as identity fields -- it is no longer
 used to lock anything in this script.
+
+AUTH REWORK (same fix applied to price_list_load.py / Customer_load.py)
+-----------------------------------------------------------------------
+config.json no longer has a "qad" key with a stored service-account
+username/password -- it now has "environments": {"TEST": {...},
+"PROD": {...}}, which only holds base_url/client_id/grant_type, NOT
+credentials. This script can no longer fetch its own token, so
+TokenManager now just holds a token + base_url handed to it by the caller
+(main.py's session, or the __main__ CLI login block below) instead of
+calling _fetch_token(). Every function that built a URL from
+CONFIG['qad']['base_url'] (call_browse_api, get_price_list_pricing_fields)
+now takes an explicit base_url parameter instead. fetch_to_excel() now
+takes a TokenManager instead of building its own.
 """
 
 import os
@@ -132,31 +145,47 @@ COMBINATION_TYPE_REVERSE_MAP = {v: k for k, v in COMBINATION_TYPE_MAP.items()}
 
 
 # =============================================================================
-# 1. AUTH  (identical pattern to Customer_load.TokenManager)
+# 1. AUTH  (CHANGED: token + base_url now supplied by caller)
 # =============================================================================
-
-def _fetch_token() -> str:
-    url = f"{CONFIG['qad']['base_url']}/oauth/token"
-    resp = requests.post(url, data=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("OAuth response did not contain access_token")
-    return token
-
+# CHANGED: this script no longer fetches its own OAuth token. config.json's
+# old "qad" key (which held service-account username/password) is gone,
+# replaced by "environments": {"TEST": {...}, "PROD": {...}} -- and those
+# blocks only have base_url/client_id/grant_type, no password. The real
+# credentials only exist for the moment a user logs in via main.py's
+# /api/login, which keeps the resulting access_token server-side in
+# SESSIONS[session_id]. TokenManager is now just a holder for that token
+# plus the base_url it's valid against, handed in by the caller.
 
 class TokenManager:
-    def __init__(self):
-        self._token: str | None = None
+    """Holds the QAD access token + base_url for one run.
+
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]), or obtained by
+              the __main__ CLI login block below when run standalone.
+    base_url: the qracore base_url for the session's environment (same
+              host used for the original OAuth call).
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token = token
+        self.base_url = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here -- the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of silently
+        # failing to hit an /oauth/token endpoint with nothing to send.
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically -- please log in again and re-run the fetch."
+        )
 
 
 class _TokenExpired(Exception):
@@ -233,12 +262,13 @@ def build_range_criteria(field: str, value_from: str, value_to: str) -> list["Fi
 def call_browse_api(
     filters: list[FilterCriteria],
     token: str,
+    base_url: str,
     page: int,
     page_size: int,
     page_action: str,
     call_id: str,
 ) -> dict:
-    url = f"{CONFIG['qad']['base_url']}/api/qracore/browses"
+    url = f"{base_url}/api/qracore/browses"
     params: list[tuple[str, str]] = [
         ("browseId", BROWSE_ID),
         ("callId", call_id),
@@ -274,7 +304,7 @@ def iter_browse_rows(
     while True:
         for attempt in range(2):
             try:
-                resp_json = call_browse_api(filters, tm.get(), page, page_size, page_action, call_id)
+                resp_json = call_browse_api(filters, tm.get(), tm.base_url, page, page_size, page_action, call_id)
                 break
             except _TokenExpired:
                 if attempt == 0:
@@ -310,8 +340,8 @@ def iter_browse_rows(
 DETAIL_VIEW_URI = "urn:be:com.qad.sales.pricing.IPriceListV2"
 
 
-def get_price_list_pricing_fields(key: dict, tm: "TokenManager") -> dict | None:
-    url = f"{CONFIG['qad']['base_url']}/api/erp/priceListV2s"
+def get_price_list_pricing_fields(key: dict, token: str, base_url: str, tm: "TokenManager") -> dict | None:
+    url = f"{base_url}/api/erp/priceListV2s"
     params = {
         "domainCode":    key.get("domainCode", ""),
         "priceListCode": key.get("priceListCode", ""),
@@ -329,7 +359,7 @@ def get_price_list_pricing_fields(key: dict, tm: "TokenManager") -> dict | None:
         try:
             resp = requests.get(
                 url,
-                headers={"Authorization": f"Bearer {tm.get()}"},
+                headers={"Authorization": f"Bearer {token}"},
                 params=params,
                 timeout=30,
             )
@@ -558,6 +588,7 @@ def _write_headers(ws: Worksheet) -> None:
 def fetch_to_excel(
     filters: list[FilterCriteria],
     output_path: str,
+    tm: TokenManager,
     domain_code: str | None = None,
 ) -> tuple[int, int]:
     """
@@ -570,8 +601,6 @@ def fetch_to_excel(
     from any new rows a user later types into the same sheet. There is
     no cell/sheet protection -- users are free to edit or add rows.
     """
-    tm = TokenManager()
-
     wb = openpyxl.Workbook()
     ws = wb.active
     _write_headers(ws)
@@ -601,7 +630,7 @@ def fetch_to_excel(
                 "unitOfMeasure": browse_row.get("priceListV2.unitOfMeasure", ""),
                 "startDate":     browse_row.get("priceListV2.startDate", ""),
             }
-            pricing = get_price_list_pricing_fields(detail_key, tm)
+            pricing = get_price_list_pricing_fields(detail_key, tm.get(), tm.base_url, tm)
             if pricing:
                 flat.update(pricing)
 
@@ -621,17 +650,21 @@ def fetch_to_excel(
 # 7. ENTRY POINT  (called from main.py's /api/fetch-price-list route)
 # =============================================================================
 # Contract expected by main.py:
-#   def fetch(filters: list[dict], output_path: str, tm=None) -> dict
+#   def fetch(filters: list[dict], output_path: str, tm: TokenManager) -> dict
 #   returns {"ok": bool, "message": str, "rows": int, "skipped": int}
+#
+# CHANGED: fetch() now takes a TokenManager instead of creating its own.
+# The caller (main.py or the CLI __main__ block below) is responsible for
+# creating the TokenManager with a valid token and base_url.
 
-def fetch(filters: list[dict], output_path: str, tm: TokenManager | None = None) -> dict:
+def fetch(filters: list[dict], output_path: str, tm: TokenManager) -> dict:
     try:
         criteria = build_filter_criteria(filters)
     except Exception as exc:
         return {"ok": False, "message": f"Invalid filter: {exc}", "rows": 0, "skipped": 0}
 
     try:
-        written, skipped = fetch_to_excel(criteria, output_path)
+        written, skipped = fetch_to_excel(criteria, output_path, tm)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "rows": 0, "skipped": 0}
 
@@ -643,10 +676,43 @@ def fetch(filters: list[dict], output_path: str, tm: TokenManager | None = None)
     }
 
 
+# =============================================================================
+# 8. CLI ENTRY POINT
+# =============================================================================
+# CHANGED: the CLI path has no session to borrow a token from, so it
+# performs its own one-off OAuth login here (same flow main.py's
+# /api/login uses) and builds a TokenManager from the result. Set
+# QAD_ENVIRONMENT / QAD_USERNAME / QAD_PASSWORD to skip the prompts.
+
 if __name__ == "__main__":
+    import getpass
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
     demo_filters = [
         {"field": "price_list", "operator": "range", "value_from": "10AUTO1", "value_to": "CLP1"},
         {"field": "amount_type", "operator": "equals", "value_from": "Discount %", "value_to": None},
     ]
-    result = fetch(demo_filters, "price_list_fetch_output.xlsx")
+    result = fetch(demo_filters, "price_list_fetch_output.xlsx", tm)
     print(result)

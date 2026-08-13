@@ -6,7 +6,10 @@ into QAD via the customerV2s API.
 
 Behaviour
 ---------
-- Fetches one OAuth token per run; refreshes only on 401
+- Uses the OAuth token already obtained at login (held server-side in
+  main.py's SESSIONS store) — this script no longer fetches its own token
+  from config, because config.json no longer contains service-account
+  credentials (see TokenManager notes below).
 - Skips rows with Status = DONE (for Create operations only)
 - Lightweight mandatory-field check before any API call
 - Success/error extraction normalized via qad_response_utils.normalize_response,
@@ -186,31 +189,55 @@ DOMAIN_FIELD_TO_COLUMN = {
 # =============================================================================
 # 1. AUTHENTICATION
 # =============================================================================
-
-def _fetch_token() -> str:
-    url  = f"{CONFIG['qad']['base_url']}/oauth/token"
-    resp = requests.post(url, data=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("OAuth response did not contain access_token")
-    return token
-
+#
+# CHANGED (see explanation in chat): this script used to fetch its own OAuth
+# token from CONFIG['qad']['auth'] (a service-account username/password kept
+# in config.json). config.json no longer has a "qad" key — it now has
+# "environments": {"TEST": {...}, "PROD": {...}}, and those blocks only hold
+# base_url/client_id/grant_type, NOT a username/password. The real
+# username/password now only ever exists for the moment the user logs in via
+# main.py's /api/login, which performs the OAuth exchange itself and keeps
+# the resulting access_token server-side in SESSIONS[session_id].
+#
+# So TokenManager no longer knows how to mint its own token — it's handed
+# the token (and the base_url that token is valid against) that main.py
+# already obtained for this session, and just holds onto it for the run.
+#
+# If the token expires mid-run (401), this script CANNOT silently get a new
+# one — it never had the password. TokenManager.refresh() raises instead of
+# retrying, so process_file() surfaces a clear "please log in again" error
+# on that row rather than the confusing bare KeyError('qad') seen before.
 
 class TokenManager:
-    """Holds one token for the run; refreshes on demand (401)."""
+    """Holds the QAD access token + base_url for one run.
 
-    def __init__(self):
-        self._token: str | None = None
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]).
+    base_url: the qracore base_url for the session's environment
+              (same host used for the original OAuth call), e.g.
+              CONFIG['environments']['TEST']['base_url'].
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token    = token
+        self.base_url  = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here — the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of trying (and
+        # failing) to hit an /oauth/token endpoint with nothing to send.
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically — please log in again and re-run the load."
+        )
 
 
 # =============================================================================
@@ -385,7 +412,7 @@ def build_payload(row: dict) -> dict:
                 "taxUsageDescription":                      "",
                 "isTaxable":                                bool_val("Taxable(Yes/No)"),
                 "isTaxInCity":                              bool_val("Tax in City(Yes/No)"),
-                "isTaxIncluded":                            bool_val("Tax Included(Yes/No)"),
+                "isTaxIncluded":                             bool_val("Tax Included(Yes/No)"),
                 "isTaxReport":                              bool_val("Tax Report"),
                 "isLastFiling":                             False,
                 "isReportedIN":                             False,
@@ -513,12 +540,21 @@ def build_payload(row: dict) -> dict:
 # =============================================================================
 # 3. CUSTOMER API
 # =============================================================================
+#
+# CHANGED: every function below used to build its URL from
+# CONFIG['qad']['base_url']. That key no longer exists in config.json, so
+# each function now takes an explicit base_url parameter instead — supplied
+# by the caller (process_file), which gets it from tm.base_url. This keeps
+# the functions themselves config-agnostic: they just talk to whatever host
+# they're told to, which is also friendlier for TEST vs PROD since the same
+# code path now naturally follows whichever environment the logged-in
+# session belongs to.
 
 class _TokenExpired(Exception):
     pass
 
 
-def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[bool, list]:
+def post_customer(payload: dict, token: str, base_url: str, is_create: bool = False) -> tuple[bool, list]:
     """
     POST customer payload to QAD.
 
@@ -536,12 +572,12 @@ def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[b
 
     if is_create:
         url = (
-            f"{CONFIG['qad']['base_url']}/api/erp/customerV2s"
+            f"{base_url}/api/erp/customerV2s"
             f"?viewUri=urn:be:com.qad.base.customer.ICustomerV2"
         )
     else:
         url = (
-            f"{CONFIG['qad']['base_url']}/api/erp/customerV2s"
+            f"{base_url}/api/erp/customerV2s"
             f"?sharedSetCode={shared_set}&customerCode={customer_code}"
             f"&viewUri=urn:be:com.qad.base.customer.ICustomerV2"
         )
@@ -584,8 +620,8 @@ def post_customer(payload: dict, token: str, is_create: bool = False) -> tuple[b
     return normalize_response(resp_json, resp.status_code)
 
 
-def get_customer(shared_set: str, customer_code: str, token: str) -> dict:
-    url = f"{CONFIG['qad']['base_url']}/api/erp/customerV2s"
+def get_customer(shared_set: str, customer_code: str, token: str, base_url: str) -> dict:
+    url = f"{base_url}/api/erp/customerV2s"
 
     resp = requests.get(
         url,
@@ -605,9 +641,9 @@ def get_customer(shared_set: str, customer_code: str, token: str) -> dict:
 # 4. DOMAIN SETTINGS API  (mfgCustomers)
 # =============================================================================
 
-def get_mfg_customer(domain: str, customer_code: str, token: str) -> dict:
+def get_mfg_customer(domain: str, customer_code: str, token: str, base_url: str) -> dict:
     """Fetch the auto-created mfgCustomer domain record."""
-    url = f"{CONFIG['qad']['base_url']}/api/erp/mfgCustomers"
+    url = f"{base_url}/api/erp/mfgCustomers"
 
     resp = requests.get(
         url,
@@ -626,7 +662,7 @@ def get_mfg_customer(domain: str, customer_code: str, token: str) -> dict:
     return resp.json()
 
 
-def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str) -> tuple[bool, list]:
+def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str, base_url: str) -> tuple[bool, list]:
     """
     POST updated domain settings back to QAD.
 
@@ -634,7 +670,7 @@ def post_mfg_customer(payload: dict, domain: str, customer_code: str, token: str
     via qad_response_utils.normalize_response().
     """
     url = (
-        f"{CONFIG['qad']['base_url']}/api/erp/mfgCustomers"
+        f"{base_url}/api/erp/mfgCustomers"
         f"?domainContext={domain}&customerCode={customer_code}"
         f"&viewUri=urn:be:com.qad.base.customer.IMfgCustomer"
     )
@@ -678,12 +714,13 @@ def update_domain_settings(
     site_code:     str,
     daybook_set:   str,
     token:         str,
+    base_url:      str,
 ) -> tuple[bool, list]:
     """
     GET auto-created mfgCustomer → patch siteCode + daybookSetCode → POST back.
     Returns (success, errors) — errors is a normalized list, see post_mfg_customer().
     """
-    existing = get_mfg_customer(domain, customer_code, token)
+    existing = get_mfg_customer(domain, customer_code, token, base_url)
 
     mfg_list = (
         existing.get("data", {}).get("mfgCustomers")
@@ -704,7 +741,7 @@ def update_domain_settings(
     mfg_record["siteCode"]       = site_code
     mfg_record["daybookSetCode"] = daybook_set
 
-    return post_mfg_customer(payload, domain, customer_code, token)
+    return post_mfg_customer(payload, domain, customer_code, token, base_url)
 
 
 # =============================================================================
@@ -820,6 +857,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                 row_data.get("Shared Set", ""),
                 row_data.get("Customer", ""),
                 tm.get(),
+                tm.base_url,
             )
 
             if not existing.get("data") or not existing["data"].get("customerV2s"):
@@ -863,12 +901,16 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
         for attempt in range(2):
             try:
-                success, errors = post_customer(payload, tm.get(), is_create=is_create)
+                success, errors = post_customer(payload, tm.get(), tm.base_url, is_create=is_create)
                 break
             except _TokenExpired:
                 if attempt == 0:
-                    tm.refresh()
-                    continue
+                    try:
+                        tm.refresh()
+                        continue
+                    except RuntimeError as refresh_exc:
+                        errors = [{"fieldName": None, "message": str(refresh_exc), "fieldValue": None, "code": None}]
+                        break
                 errors = [{"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}]
                 break
             except requests.RequestException as e:
@@ -896,13 +938,17 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             for attempt in range(2):
                 try:
                     domain_ok, domain_errors = update_domain_settings(
-                        customer_code, domain, site_code, daybook_set, tm.get()
+                        customer_code, domain, site_code, daybook_set, tm.get(), tm.base_url
                     )
                     break
                 except _TokenExpired:
                     if attempt == 0:
-                        tm.refresh()
-                        continue
+                        try:
+                            tm.refresh()
+                            continue
+                        except RuntimeError as refresh_exc:
+                            domain_errors = [{"fieldName": None, "message": str(refresh_exc), "fieldValue": None, "code": None}]
+                            break
                     domain_errors = [{"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}]
                     break
                 except requests.RequestException as e:
@@ -932,8 +978,16 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 # =============================================================================
 # 7. ORCHESTRATOR
 # =============================================================================
+#
+# CHANGED: run() is the standalone/CLI entry point (used when this script is
+# executed directly, not through main.py's web backend). It has no session
+# to borrow a token from, so it still needs to authenticate on its own. If
+# you use this CLI path, set QAD_ENVIRONMENT / QAD_USERNAME / QAD_PASSWORD
+# (or wire in your own prompt) so TokenManager can be constructed — see the
+# __main__ block below. This keeps the standalone script usable without
+# reintroducing a stored service-account password in config.json.
 
-def run(folder_path: str) -> tuple[int, int]:
+def run(folder_path: str, tm: TokenManager) -> tuple[int, int]:
     folder = os.path.abspath(folder_path)
 
     if not os.path.exists(folder):
@@ -948,8 +1002,6 @@ def run(folder_path: str) -> tuple[int, int]:
     if not xlsx_files:
         print(f"ERROR: No .xlsx files found in: {folder}")
         raise RuntimeError(f"No .xlsx files found in: {folder}")
-
-    tm = TokenManager()
 
     total_ok   = 0
     total_fail = 0
@@ -985,8 +1037,34 @@ def run(folder_path: str) -> tuple[int, int]:
 # =============================================================================
 
 if __name__ == "__main__":
+    import getpass
+    import requests as _requests
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = _requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
     folder = os.path.abspath(
         os.path.join(ROOT_DIR, CONFIG["folders"]["customer"])
     )
-    ok, fail = run(folder)
+    ok, fail = run(folder, tm)
     sys.exit(0 if fail == 0 else 1)

@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
+<script src="/services/api.js"></script>
 <script src="/services/session.js"></script>
 <script src="/services/authGuard.js"></script>
+<script src="/services/configService.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Settings — QAD Data Loader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -313,7 +315,7 @@ input.path-field:focus{
 
 </div>
 
-<script src="/services/api.js"></script>
+
 
 <script>
 // ── Folder definitions ──────────────────────────────────────────────────────
@@ -349,8 +351,7 @@ FOLDER_DEFS.forEach(f => {
 // ── Load current config from backend ───────────────────────────────────────
 async function loadConfig() {
   try {
-    const res  = await fetch(`${API}/api/config`);
-    const data = await res.json();
+    const data = await ConfigService.load();
     if (!data.ok) { showToast('Could not load config: ' + data.error, false); return; }
 
     const cfg = data.config;
@@ -385,12 +386,7 @@ async function saveConfig() {
   };
 
   try {
-    const res  = await fetch(`${API}/api/save-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
+    const data = await ConfigService.save(payload);
     showToast(data.ok ? 'Settings saved successfully' : data.error, data.ok);
   } catch(e) {
     showToast('Save failed — ' + e.message, false);

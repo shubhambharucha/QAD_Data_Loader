@@ -6,6 +6,21 @@ folder into QAD via the priceListV2s API. Mirrors Customer_load.py's shape:
 one TokenManager per run, GET->patch->POST for updates, field-level error
 highlighting via resolve_qad_errors(), progress callback for SSE.
 
+CHANGE LOG (this revision)
+---------------------------
+AUTH REWORK (same fix applied to Customer_load.py / Supplier_load.py):
+config.json no longer has a "qad" key with a stored service-account
+username/password -- it now has "environments": {"TEST": {...},
+"PROD": {...}}, which only holds base_url/client_id/grant_type, NOT
+credentials. This script can no longer fetch its own token, so
+TokenManager now just holds a token + base_url handed to it by the caller
+(main.py's session, or the __main__ CLI login block below) instead of
+calling _fetch_token(). Every function that built a URL from
+CONFIG['qad']['base_url'] (post_price_list, get_price_list,
+search_price_list_by_key, and by extension expire_existing_record) now
+takes an explicit base_url parameter instead. run() now takes a
+TokenManager instead of building its own.
+
 CONFIRMED business rules this loader assumes (2026-07-23):
   - Amount is QAD-calculated. Never sent in any payload, never patched.
   - Break Category is free text, no lookup/format constraint.
@@ -164,31 +179,48 @@ QAD_FIELD_TO_COLUMN = {
 
 
 # =============================================================================
-# 1. AUTHENTICATION  (identical pattern to Customer_load.py)
+# 1. AUTHENTICATION
 # =============================================================================
-
-def _fetch_token() -> str:
-    url = f"{CONFIG['qad']['base_url']}/oauth/token"
-    resp = requests.post(url, data=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("OAuth response did not contain access_token")
-    return token
-
+#
+# CHANGED: this script no longer fetches its own OAuth token. config.json's
+# old "qad" key (which held a service-account username/password) is gone,
+# replaced by "environments": {"TEST": {...}, "PROD": {...}} -- and those
+# blocks only have base_url/client_id/grant_type, no password. The real
+# credentials only exist for the moment a user logs in via main.py's
+# /api/login, which keeps the resulting access_token server-side in
+# SESSIONS[session_id]. TokenManager is now just a holder for that token
+# plus the base_url it's valid against, handed in by the caller.
 
 class TokenManager:
-    def __init__(self):
-        self._token: str | None = None
+    """Holds the QAD access token + base_url for one run.
+
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]), or obtained by
+              the __main__ CLI login block below when run standalone.
+    base_url: the qracore base_url for the session's environment (same
+              host used for the original OAuth call).
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token   = token
+        self.base_url = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here -- the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of silently
+        # failing to hit an /oauth/token endpoint with nothing to send.
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically -- please log in again and re-run the load."
+        )
 
 
 class _TokenExpired(Exception):
@@ -360,14 +392,20 @@ def build_payload(row: dict, domain: str) -> dict:
 # =============================================================================
 # 4. PRICE LIST API
 # =============================================================================
+#
+# CHANGED: post_price_list, get_price_list, and search_price_list_by_key
+# used to build their URLs from CONFIG['qad']['base_url']. That key no
+# longer exists in config.json, so each now takes an explicit base_url
+# parameter instead -- supplied by the caller (process_file /
+# expire_existing_record), which gets it from tm.base_url.
 
-def post_price_list(payload: dict, token: str, key_params: dict | None = None) -> tuple[bool, list, list]:
+def post_price_list(payload: dict, token: str, base_url: str, key_params: dict | None = None) -> tuple[bool, list, list]:
     """
     POST payload to QAD. Returns (success, errors, confirmation_messages).
     confirmation_messages comes from priceListConfs -- informational warnings
     that do NOT block success (confirmed: loads complete even with them).
     """
-    url = f"{CONFIG['qad']['base_url']}/api/erp/priceListV2s"
+    url = f"{base_url}/api/erp/priceListV2s"
     params = {"viewUri": DETAIL_VIEW_URI}
 
     if key_params:
@@ -424,8 +462,8 @@ def post_price_list(payload: dict, token: str, key_params: dict | None = None) -
     return success, errors, conf_messages
 
 
-def get_price_list(key: dict, token: str) -> dict:
-    url = f"{CONFIG['qad']['base_url']}/api/erp/priceListV2s"
+def get_price_list(key: dict, token: str, base_url: str) -> dict:
+    url = f"{base_url}/api/erp/priceListV2s"
     resp = requests.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
@@ -460,7 +498,7 @@ def _browse_filter_value(raw_value: str) -> str:
     return v if v else QAD_ALL_WILDCARD
 
 
-def search_price_list_by_key(key: dict, token: str) -> list:
+def search_price_list_by_key(key: dict, token: str, base_url: str) -> list:
     """
     AUTO-VERSIONING support. Search QAD's priceListV2s browse for every
     record sharing the business key (Domain, Price List, Customer, Item,
@@ -479,7 +517,7 @@ def search_price_list_by_key(key: dict, token: str) -> list:
     a list of raw browse-row dicts (priceListV2.<field> keys, may be
     empty). Never raises for "no match", only for real HTTP/auth failures.
     """
-    url = f"{CONFIG['qad']['base_url']}/api/qracore/browses"
+    url = f"{base_url}/api/qracore/browses"
 
     filters = [
         f"priceListV2.domainCode,eq,{key.get('domainCode', '')},literal",
@@ -547,7 +585,7 @@ def find_overlapping_record(records: list, incoming_start_date) -> dict | None:
     return None
 
 
-def expire_existing_record(rec: dict, new_expire_iso: str, token: str) -> tuple[bool, list]:
+def expire_existing_record(rec: dict, new_expire_iso: str, token: str, base_url: str) -> tuple[bool, list]:
     """
     AUTO-VERSIONING support. Shrinks an existing record's validity window
     so it ends the day before an incoming Create row's Start Date. Mirrors
@@ -571,7 +609,7 @@ def expire_existing_record(rec: dict, new_expire_iso: str, token: str) -> tuple[
         "startDate":     rec.get("priceListV2.startDate", ""),
     }
 
-    existing = get_price_list(key, token)
+    existing = get_price_list(key, token, base_url)
     pl_list = existing.get("data", {}).get("priceListV2s") or existing.get("priceListV2s") or []
     if not pl_list:
         return False, [{
@@ -597,7 +635,7 @@ def expire_existing_record(rec: dict, new_expire_iso: str, token: str) -> tuple[
         "orderCode":     pl.get("orderCode", ""),
     }
 
-    success, errors, _ = post_price_list(payload, token, post_key_params)
+    success, errors, _ = post_price_list(payload, token, base_url, post_key_params)
     return success, errors
 
 
@@ -699,7 +737,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                 "startDate":     _excel_to_iso(row_data.get("Start Date", ""), "Start Date"),
             }
 
-            existing = get_price_list(key, tm.get())
+            existing = get_price_list(key, tm.get(), tm.base_url)
             pl_list = existing.get("data", {}).get("priceListV2s") or existing.get("priceListV2s") or []
 
             if not pl_list:
@@ -774,10 +812,10 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
             if incoming_start_date is not None:
                 try:
                     try:
-                        matches = search_price_list_by_key(business_key, tm.get())
+                        matches = search_price_list_by_key(business_key, tm.get(), tm.base_url)
                     except _TokenExpired:
                         tm.refresh()
-                        matches = search_price_list_by_key(business_key, tm.get())
+                        matches = search_price_list_by_key(business_key, tm.get(), tm.base_url)
                 except requests.RequestException as e:
                     matches = []
                     versioning_error = f"Auto-versioning lookup failed: {e}"
@@ -791,10 +829,10 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                         new_expire_iso = _shift_iso_date(incoming_start_iso, -1)
                         try:
                             try:
-                                exp_success, exp_errors = expire_existing_record(overlap, new_expire_iso, tm.get())
+                                exp_success, exp_errors = expire_existing_record(overlap, new_expire_iso, tm.get(), tm.base_url)
                             except _TokenExpired:
                                 tm.refresh()
-                                exp_success, exp_errors = expire_existing_record(overlap, new_expire_iso, tm.get())
+                                exp_success, exp_errors = expire_existing_record(overlap, new_expire_iso, tm.get(), tm.base_url)
                         except requests.RequestException as e:
                             exp_success, exp_errors = False, [{
                                 "fieldName": None, "message": f"Network error: {e}",
@@ -826,12 +864,16 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
         for attempt in range(2):
             try:
-                success, errors, conf_msgs = post_price_list(payload, tm.get(), post_key_params)
+                success, errors, conf_msgs = post_price_list(payload, tm.get(), tm.base_url, post_key_params)
                 break
             except _TokenExpired:
                 if attempt == 0:
-                    tm.refresh()
-                    continue
+                    try:
+                        tm.refresh()
+                        continue
+                    except RuntimeError as refresh_exc:
+                        errors = [{"fieldName": None, "message": str(refresh_exc), "fieldValue": None, "code": None}]
+                        break
                 errors = [{"fieldName": None, "message": "Token refresh failed -- unauthorised", "fieldValue": None, "code": None}]
                 break
             except requests.RequestException as e:
@@ -862,8 +904,13 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 # =============================================================================
 # 7. ORCHESTRATOR
 # =============================================================================
+#
+# CHANGED: run() used to build its own TokenManager() with zero arguments.
+# Since TokenManager now requires (token, base_url), run() takes an
+# already-constructed TokenManager from the caller instead -- main.py's
+# session, or the __main__ CLI login block below.
 
-def run(folder_path: str) -> tuple[int, int]:
+def run(folder_path: str, tm: TokenManager) -> tuple[int, int]:
     folder = os.path.abspath(folder_path)
 
     if not os.path.exists(folder):
@@ -876,7 +923,6 @@ def run(folder_path: str) -> tuple[int, int]:
     if not xlsx_files:
         raise RuntimeError(f"No .xlsx files found in: {folder}")
 
-    tm = TokenManager()
     total_ok, total_fail = 0, 0
 
     for file_name in xlsx_files:
@@ -889,14 +935,50 @@ def run(folder_path: str) -> tuple[int, int]:
     return total_ok, total_fail
 
 
+# =============================================================================
+# 8. ENTRY POINT
+# =============================================================================
+#
+# CHANGED: the CLI path has no session to borrow a token from, so it
+# performs its own one-off OAuth login here (same flow main.py's
+# /api/login uses) and builds a TokenManager from the result. Set
+# QAD_ENVIRONMENT / QAD_USERNAME / QAD_PASSWORD to skip the prompts.
+#
+# Allow either:
+#   python price_list_load.py
+#   python price_list_load.py D:\CustomFolder
+# Same folder-argument behavior as before.
+
 if __name__ == "__main__":
-    # Allow either:
-    #   python price_list_load.py
-    #   python price_list_load.py D:\CustomFolder
-    # Same behavior as validator.
+    import getpass
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
     if len(sys.argv) > 1:
         folder = os.path.abspath(sys.argv[1])
     else:
         folder = os.path.abspath(os.path.join(ROOT_DIR, CONFIG["folders"]["price_list"]))
-    ok, fail = run(folder)
+
+    ok, fail = run(folder, tm)
     sys.exit(0 if fail == 0 else 1)

@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-  /* ── ACCESS GATE ──
+<script src="/services/api.js"></script>
 <script src="/services/session.js"></script>
 <script src ="/services/authGuard.js"></script>
+<script src="/services/workspaceService.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>QAD Data Loader — Workspace</title>
 <link rel="icon" type="image/png" href="public/logo.png">
@@ -278,9 +279,6 @@ table.rt tr:hover td{background:rgba(255,255,255,.015)}
   <div style="font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted2);">QAD Data Loader</div>
 </footer>
 
-<script src="/services/api.js"></script>
-<script src="/services/session.js"></script>
-
 <script>
 
 /* ── SESSION / LOGGING ── */
@@ -299,18 +297,14 @@ document.getElementById('btn-logout').addEventListener('click', () => {
 /* Best-effort activity logging — never blocks the actual operation. */
 function logActivity(action, status, details){
   try{
-    fetch(`${API}/api/log-activity`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
+    WorkspaceService.logActivity({
         username: SESSION_USER || null,
         environment: SESSION_ENV || null,
         action, status,
         details: details || null,
-      })
     }).catch(()=>{});
   }catch(e){}
-}
+} 
 
 /* ── NAV SCROLL ── */
 window.addEventListener('scroll',()=>{document.getElementById('nav').classList.toggle('scrolled',window.scrollY>40);});
@@ -421,8 +415,7 @@ let TEMPLATE_ENTITIES=['Supplier','Customer','PriceList'];
 
 (async function loadTemplateEntities(){
   try{
-    const res=await fetch(`${API}/api/blank-template/entities`);
-    const data=await res.json();
+    const data = await WorkspaceService.getTemplateEntities();
     if(data.ok && Array.isArray(data.entities) && data.entities.length){
       TEMPLATE_ENTITIES=data.entities;
       syncBtns();
@@ -446,12 +439,12 @@ const lockedEntities=new Set();
 async function loadPermissions(){
   if(!SESSION_ID) return;
   try{
-    const res=await fetch(`${API}/api/permissions?session_id=${encodeURIComponent(SESSION_ID)}`);
+    const res = await WorkspaceService.getPermissions(SESSION_ID);
     if(!res.ok){
       if(res.status===401){
         // session expired server-side — bounce back to login
-        sessionStorage.removeItem('qad_authenticated');
-        window.location.href='/login.html';
+        Session.clear();
+        window.location.href='/';
       }
       return;
     }
@@ -532,8 +525,7 @@ async function runOp(type){
   // Re-check permissions right before running — the backend re-checks per
   // entity too (can't be bypassed), but this keeps the UI honest and drops
   // anything that got locked since page load before we even start.
-  await loadPermissions();
-  if(!sel.size)return;
+
 
   running=true;
   currentOperation=type;
@@ -566,11 +558,13 @@ async function runOp(type){
   Terminal.log(`Scanning ${sel.size} selected entit${sel.size===1?'y':'ies'}...`,'▸','process');
   await delay(300);
 
+  await loadPermissions();
+  if(!sel.size)return;
+
   try{
-    const res=await fetch(API+(type==='validate'?'/api/validate':'/api/load'),{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({entities:selectedEntities, session_id: SESSION_ID})
+    const res = await WorkspaceService[type === 'validate' ? 'validate' : 'load']({
+      session_id: SESSION_ID,
+      entities: selectedEntities
     });
 
     if(!res.ok){
@@ -719,10 +713,8 @@ document.getElementById('btn-t').addEventListener('click', async ()=>{
   logActivity('blank_template', 'started', {entities: chosen});
 
   try{
-    const res=await fetch(`${API}/api/blank-template`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({entities:chosen})
+    const res = await WorkspaceService.downloadBlankTemplate({
+      entities: chosen
     });
 
     if(!res.ok){

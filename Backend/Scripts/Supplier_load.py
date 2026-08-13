@@ -6,6 +6,16 @@ into QAD via the supplierV2s API, then updates domain settings via mfgSuppliers.
 
 CHANGE LOG (this revision)
 ---------------------------
+11. AUTH REWORK (same fix applied to Customer_load.py): config.json no
+    longer has a "qad" key with a stored service-account username/password
+    -- it now has "environments": {"TEST": {...}, "PROD": {...}}, which
+    only holds base_url/client_id/grant_type, NOT credentials. This script
+    can no longer fetch its own token, so TokenManager now just holds a
+    token + base_url handed to it by the caller (main.py's session, or the
+    __main__ CLI login block below) instead of calling _fetch_token().
+    Every function that built a URL from CONFIG['qad']['base_url'] now
+    takes an explicit base_url parameter instead. run() now takes a
+    TokenManager instead of building its own.
 10. MERGED: Banking is no longer a separate sheet / separate API pass.
     Bank Account Format, Supplier Bank Number, and Own Bank Number are now
     optional columns on the same Suppliers sheet. A bank entry (if present)
@@ -46,7 +56,9 @@ CHANGE LOG (carried over from previous revisions)
 
 Behaviour
 ------------------------------------
-- Fetches one OAuth token per run; refreshes only on 401
+- Uses the OAuth token already obtained at login (session-scoped, see
+  TokenManager below); refreshing mid-run is no longer possible from
+  inside this script, so a 401 surfaces as a clear "log in again" error.
 - Skips rows with Status = DONE (for Create operations only)
 - Lightweight mandatory-field check before any API call
 - Success check: submitResult.success == True
@@ -206,35 +218,47 @@ def _log(msg: str):
 # =============================================================================
 # 1. AUTHENTICATION
 # =============================================================================
-
-def _fetch_token() -> str:
-    url = f"{CONFIG['qad']['base_url']}/oauth/token"
-    _log(f"AUTH requesting new token from {url}")
-    resp = requests.post(url, data=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        _log("AUTH FAILED -- response had no access_token")
-        raise RuntimeError("OAuth response did not contain access_token")
-    _log("AUTH token acquired")
-    return token
-
+#
+# CHANGED: this script no longer fetches its own OAuth token. config.json's
+# old "qad" key (which held a service-account username/password) is gone,
+# replaced by "environments": {"TEST": {...}, "PROD": {...}} -- and those
+# blocks only have base_url/client_id/grant_type, no password. The real
+# credentials only exist for the moment a user logs in via main.py's
+# /api/login, which keeps the resulting access_token server-side in
+# SESSIONS[session_id]. TokenManager is now just a holder for that token
+# plus the base_url it's valid against, handed in by the caller.
 
 class TokenManager:
-    """Holds one token for the run; refreshes on demand (401)."""
+    """Holds the QAD access token + base_url for one run.
 
-    def __init__(self):
-        self._token: str | None = None
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]), or obtained by
+              the __main__ CLI login block below when run standalone.
+    base_url: the qracore base_url for the session's environment (same
+              host used for the original OAuth call).
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token   = token
+        self.base_url = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        _log("AUTH token refresh triggered (401 received)")
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here -- the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of silently
+        # failing to hit an /oauth/token endpoint with nothing to send.
+        _log("AUTH refresh requested but no credentials available -- session must be re-logged-in")
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically -- please log in again and re-run the load."
+        )
 
 
 class _TokenExpired(Exception):
@@ -450,7 +474,7 @@ def _apply_bank_entry_to_supplier(supplier: dict, row_data: dict) -> tuple[bool,
     return True, ""
 
 
-def _verify_bank_entry(shared_set: str, supplier_code: str, expected_entry: dict, token: str) -> list[str]:
+def _verify_bank_entry(shared_set: str, supplier_code: str, expected_entry: dict, token: str, base_url: str) -> list[str]:
     """
     Post-write verification for the single bank entry just sent. Re-GETs
     the supplier and checks the entry with matching bankNumberFormatted
@@ -459,7 +483,7 @@ def _verify_bank_entry(shared_set: str, supplier_code: str, expected_entry: dict
     """
     problems = []
 
-    verify_resp = get_supplier(shared_set, supplier_code, token)
+    verify_resp = get_supplier(shared_set, supplier_code, token, base_url)
     supplier_list = verify_resp.get("data", {}).get("supplierV2s")
     if not supplier_list:
         return [f"Verification GET failed for {shared_set}.{supplier_code} -- could not confirm write"]
@@ -723,8 +747,13 @@ def build_payload(row: dict) -> dict:
 # =============================================================================
 # 5. SUPPLIER API
 # =============================================================================
+#
+# CHANGED: every function below used to build its URL from
+# CONFIG['qad']['base_url']. That key no longer exists in config.json, so
+# each function now takes an explicit base_url parameter instead --
+# supplied by the caller (process_file), which gets it from tm.base_url.
 
-def post_supplier(payload: dict, token: str, is_create: bool = False) -> tuple[bool, str]:
+def post_supplier(payload: dict, token: str, base_url: str, is_create: bool = False) -> tuple[bool, str]:
     """
     POST supplier payload to QAD.
     Returns (success, error_msg). Raises _TokenExpired on 401.
@@ -738,12 +767,12 @@ def post_supplier(payload: dict, token: str, is_create: bool = False) -> tuple[b
 
     if is_create:
         url = (
-            f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
+            f"{base_url}/api/erp/supplierV2s"
             f"?viewUri=urn:be:com.qad.base.supplier.ISupplierV2"
         )
     else:
         url = (
-            f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
+            f"{base_url}/api/erp/supplierV2s"
             f"?sharedSetCode={shared_set}&supplierCode={supplier_code}"
             f"&viewUri=urn:be:com.qad.base.supplier.ISupplierV2"
         )
@@ -790,8 +819,8 @@ def post_supplier(payload: dict, token: str, is_create: bool = False) -> tuple[b
     return False, error_msg
 
 
-def get_supplier(shared_set: str, supplier_code: str, token: str) -> dict:
-    url = f"{CONFIG['qad']['base_url']}/api/erp/supplierV2s"
+def get_supplier(shared_set: str, supplier_code: str, token: str, base_url: str) -> dict:
+    url = f"{base_url}/api/erp/supplierV2s"
     params = {
         "sharedSetCode": shared_set,
         "supplierCode":  supplier_code,
@@ -826,9 +855,9 @@ def get_supplier(shared_set: str, supplier_code: str, token: str) -> dict:
 # 6. DOMAIN SETTINGS API  (mfgSuppliers)
 # =============================================================================
 
-def get_mfg_supplier(domain: str, supplier_code: str, token: str) -> dict:
+def get_mfg_supplier(domain: str, supplier_code: str, token: str, base_url: str) -> dict:
     """Fetch the auto-created mfgSupplier domain record."""
-    url = f"{CONFIG['qad']['base_url']}/api/erp/mfgSuppliers"
+    url = f"{base_url}/api/erp/mfgSuppliers"
     params = {
         "domainContext": domain,
         "supplierCode":  supplier_code,
@@ -859,10 +888,10 @@ def get_mfg_supplier(domain: str, supplier_code: str, token: str) -> dict:
     return resp_json
 
 
-def post_mfg_supplier(payload: dict, domain: str, supplier_code: str, token: str) -> tuple[bool, str]:
+def post_mfg_supplier(payload: dict, domain: str, supplier_code: str, token: str, base_url: str) -> tuple[bool, str]:
     """POST updated domain settings back to QAD."""
     url = (
-        f"{CONFIG['qad']['base_url']}/api/erp/mfgSuppliers"
+        f"{base_url}/api/erp/mfgSuppliers"
         f"?domainContext={domain}&supplierCode={supplier_code}"
         f"&viewUri=urn:be:com.qad.base.supplier.IMfgSupplier"
     )
@@ -912,12 +941,13 @@ def update_domain_settings(
     site_code:     str,
     daybook_set:   str,
     token:         str,
+    base_url:      str,
 ) -> tuple[bool, str]:
     """
     GET auto-created mfgSupplier -> patch siteCode + daybookSetCode -> POST back.
     Returns (success, error_msg).
     """
-    existing = get_mfg_supplier(domain, supplier_code, token)
+    existing = get_mfg_supplier(domain, supplier_code, token, base_url)
 
     mfg_list = (
         existing.get("data", {}).get("mfgSuppliers")
@@ -933,7 +963,7 @@ def update_domain_settings(
     mfg_record["siteCode"]       = site_code
     mfg_record["daybookSetCode"] = daybook_set
 
-    return post_mfg_supplier(payload, domain, supplier_code, token)
+    return post_mfg_supplier(payload, domain, supplier_code, token, base_url)
 
 
 # =============================================================================
@@ -1095,6 +1125,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                     row_data.get("Shared Set", ""),
                     row_data.get("Supplier", ""),
                     tm.get(),
+                    tm.base_url,
                 )
 
                 if not existing.get("data") or not existing["data"].get("supplierV2s"):
@@ -1156,12 +1187,16 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 
             for attempt in range(2):
                 try:
-                    success, error_msg = post_supplier(payload, tm.get(), is_create=is_create)
+                    success, error_msg = post_supplier(payload, tm.get(), tm.base_url, is_create=is_create)
                     break
                 except _TokenExpired:
                     if attempt == 0:
-                        tm.refresh()
-                        continue
+                        try:
+                            tm.refresh()
+                            continue
+                        except RuntimeError as refresh_exc:
+                            error_msg = str(refresh_exc)
+                            break
                     error_msg = "Token refresh failed — unauthorised"
                     break
                 except requests.RequestException as e:
@@ -1189,13 +1224,17 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                 for attempt in range(2):
                     try:
                         domain_ok, domain_err = update_domain_settings(
-                            supplier_code, domain, site_code, daybook_set, tm.get()
+                            supplier_code, domain, site_code, daybook_set, tm.get(), tm.base_url
                         )
                         break
                     except _TokenExpired:
                         if attempt == 0:
-                            tm.refresh()
-                            continue
+                            try:
+                                tm.refresh()
+                                continue
+                            except RuntimeError as refresh_exc:
+                                domain_err = str(refresh_exc)
+                                break
                         domain_err = "Token refresh failed — unauthorised"
                         break
                     except requests.RequestException as e:
@@ -1221,16 +1260,20 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                         row_data.get("Supplier", ""),
                         expected_bank_entry,
                         tm.get(),
+                        tm.base_url,
                     )
                 except _TokenExpired:
-                    tm.refresh()
                     try:
+                        tm.refresh()
                         problems = _verify_bank_entry(
                             row_data.get("Shared Set", ""),
                             row_data.get("Supplier", ""),
                             expected_bank_entry,
                             tm.get(),
+                            tm.base_url,
                         )
+                    except RuntimeError as refresh_exc:
+                        problems = [str(refresh_exc)]
                     except requests.RequestException as e:
                         problems = [f"Verification GET failed: {e}"]
                 except requests.RequestException as e:
@@ -1270,8 +1313,13 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 # =============================================================================
 # 10. ORCHESTRATOR  (folder scan -> process every file -> return totals)
 # =============================================================================
+#
+# CHANGED: run() used to build its own TokenManager() with zero arguments.
+# Since TokenManager now requires (token, base_url), run() takes an
+# already-constructed TokenManager from the caller instead -- main.py's
+# session, or the __main__ CLI login block below.
 
-def run(folder_path: str) -> tuple[int, int]:
+def run(folder_path: str, tm: TokenManager) -> tuple[int, int]:
     """
     Scan folder_path for .xlsx files, process each one, return (total_ok, total_fail).
     This is the single entry point used by both main.py and __main__.
@@ -1292,8 +1340,6 @@ def run(folder_path: str) -> tuple[int, int]:
     if not xlsx_files:
         print(f"ERROR: No .xlsx files found in: {folder}")
         raise RuntimeError(f"No .xlsx files found in: {folder}")
-
-    tm = TokenManager()
 
     total_ok   = 0
     total_fail = 0
@@ -1340,10 +1386,40 @@ def run(folder_path: str) -> tuple[int, int]:
 # =============================================================================
 # 11. ENTRY POINT
 # =============================================================================
+#
+# CHANGED: the CLI path has no session to borrow a token from, so it
+# performs its own one-off OAuth login here (same flow main.py's
+# /api/login uses) and builds a TokenManager from the result. Set
+# QAD_ENVIRONMENT / QAD_USERNAME / QAD_PASSWORD to skip the prompts.
 
 if __name__ == "__main__":
+    import getpass
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
     folder = os.path.abspath(
         os.path.join(ROOT_DIR, CONFIG["folders"]["supplier"])
     )
-    ok, fail = run(folder)
+    ok, fail = run(folder, tm)
     sys.exit(0 if fail == 0 else 1)
