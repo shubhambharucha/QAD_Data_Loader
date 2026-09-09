@@ -14,6 +14,7 @@ POST /api/test-connection
 POST /api/login              { "username": "...", "password": "...", "environment": "TEST"|"PROD" }
 GET  /api/permissions?session_id=...
 POST /api/log-activity       { "username", "environment", "action", "status", "details" }
+GET  /api/licenses
 GET  /health
 
 
@@ -93,7 +94,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
+from database import get_connection
+from database import validate_user_license
 
 # ── main.py lives inside Backend/ ────────────────────────────────────────────
 BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))         # .../QAD_data_loader/Backend
@@ -987,6 +989,16 @@ def api_login(req: LoginRequest):
             })
             return {"ok": False, "error": "No access_token in response"}
 
+        license_valid, license_message = validate_user_license(username)
+
+        if not license_valid:
+            log_activity({
+                "username": username, "environment": environment,
+                "action": "login", "status": "failed",
+                "details": {"error": f"License validation failed: {license_message}"},
+            })
+            return {"ok": False, "error": f"License validation failed: {license_message}"}
+
         session_id = _create_session(username, environment, token)
 
         log_activity({
@@ -1009,6 +1021,32 @@ def api_login(req: LoginRequest):
         })
         return {"ok": False, "error": str(e)}
 
+# ----------licensing check--------#
+@app.get("/api/licenses")
+def get_licenses():
+
+    conn = get_connection()
+    cur  = conn.cursor()
+
+    cur.execute("SELECT u.username, u.email, l.license_key, l.expiry_date, l.status " \
+    "FROM users u JOIN licenses l ON u.customer_id = l.customer_id")
+
+    rows = cur.fetchall()
+    result = []
+
+    for row in rows:
+        result.append({
+            "username": row[0],
+            "email": row[1],
+            "license_key": row[2],
+            "expiry_date": row[3],
+            "status": row[4],
+        })
+
+    cur.close()
+    conn.close()
+
+    return result
 # ═════════════════════════════════════════════════════════════════════════════
 # PERMISSIONS  —  QAD access-based module control
 # ═════════════════════════════════════════════════════════════════════════════

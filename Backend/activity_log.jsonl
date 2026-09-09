@@ -176,3 +176,11 @@
 {"timestamp": "2026-08-13T11:48:25", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
 {"timestamp": "2026-08-13T11:48:27", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260813_114827.xlsx"}}
 {"timestamp": "2026-08-13T11:50:34", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-09-08T15:05:44", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-08T15:08:54", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-08T15:09:07", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-08T16:12:01", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-08T16:12:13", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-08T16:12:15", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-08T16:12:30", "username": "yogiraj.dande@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "License validation failed: User is not licensed to use this application."}}
+{"timestamp": "2026-09-08T16:22:05", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
