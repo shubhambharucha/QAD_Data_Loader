@@ -184,3 +184,7 @@
 {"timestamp": "2026-09-08T16:12:15", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
 {"timestamp": "2026-09-08T16:12:30", "username": "yogiraj.dande@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "License validation failed: User is not licensed to use this application."}}
 {"timestamp": "2026-09-08T16:22:05", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-10T15:35:22", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "connection to server at \"10.0.54.52\", port 5432 failed: Connection timed out (0x0000274C/10060)\n\tIs the server running on that host and accepting TCP/IP connections?\n"}}
+{"timestamp": "2026-09-10T15:36:23", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "connection to server at \"10.0.54.52\", port 5432 failed: Connection timed out (0x0000274C/10060)\n\tIs the server running on that host and accepting TCP/IP connections?\n"}}
+{"timestamp": "2026-09-10T15:37:32", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-10T15:37:38", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}

@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 def get_connection():
     return psycopg2.connect(
-        host="10.0.54.52",
+        host="35.154.230.126",
         port=5432,
         database="central_licensing",
         user="postgres",

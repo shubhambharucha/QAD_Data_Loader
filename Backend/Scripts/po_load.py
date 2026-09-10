@@ -80,7 +80,16 @@ from config import CONFIG
 from excel_format_utils import RED_FILL, CLEAR_FILL, mark_done, mark_error, resolve_qad_errors
 from qad_response_utils import normalize_response
 
-_BASE_URL = CONFIG["qad"]["base_url"]
+# ── Get environment from argument or default to TEST ────────────────────
+
+# Default to TEST for testing — pass "PROD" as argument to use production
+ENVIRONMENT = sys.argv[1].upper() if len(sys.argv) > 1 else "TEST"
+if ENVIRONMENT not in CONFIG.get("environments", {}):
+    raise RuntimeError(f"Invalid environment '{ENVIRONMENT}'. Available: {list(CONFIG.get('environments', {}).keys())}")
+print(f"[INFO] Using environment: {ENVIRONMENT}")
+ 
+_QAD_CONFIG = CONFIG["environments"][ENVIRONMENT]
+_BASE_URL = _QAD_CONFIG["base_url"]
 
 # ── API endpoint templates (UNCHANGED) ─────────────────────────────────────
 HEADER_URL       = f"{_BASE_URL}/api/erp/purchaseOrderHeaders?viewUri=urn:be:com.qad.purchasing.purchaseorders.IPurchaseOrderHeader"
