@@ -12,19 +12,19 @@
     }
   },
   "folders": {
-    "BR": "../Data/BR",
-    "GCM": "../Data/GCM",
+    "BR": "D:\\QAD_data_loader\\Data\\BR",
+    "GCM": "D:\\QAD_data_loader\\Data\\GCM",
     "supplier": "D:\\QAD_data_loader\\Data\\Supplier",
-    "customer": "../Data/Customer",
-    "purchase_order": "../Data/PurchaseOrder",
-    "sales_order": "../Data/SalesOrder",
-    "production_order": "../Data/ProductionOrder",
-    "item": "../Data/Item",
-    "customer_item": "../Data/Customer_Item",
-    "supplier_item": "../Data/Supplier_Item",
-    "supplier_price_list": "../Data/SupplierPriceList",
-    "price_list": "../Data/PriceList",
-    "BOM": "../Data/BOM"
+    "customer": "D:\\QAD_data_loader\\Data\\Customer",
+    "purchase_order": "D:\\QAD_data_loader\\Data\\PurchaseOrder",
+    "sales_order": "D:\\QAD_data_loader\\Data\\SalesOrder",
+    "production_order": "D:\\QAD_data_loader\\Data\\ProductionOrder",
+    "item": "D:\\QAD_data_loader\\Data\\Data/Item",
+    "customer_item": "D:\\QAD_data_loader\\Data\\Customer_Item",
+    "supplier_item": "D:\\QAD_data_loader\\Data\\Supplier_Item",
+    "supplier_price_list": "D:\\QAD_data_loader\\Data\\SupplierPriceList",
+    "price_list": "D:\\QAD_data_loader\\Data\\PriceList",
+    "BOM": "D:\\QAD_data_loader\\Data\\Data/BOM"
   },
   "permissions": {
     "entity_uri_map": {

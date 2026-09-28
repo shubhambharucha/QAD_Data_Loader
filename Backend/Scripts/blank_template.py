@@ -49,8 +49,9 @@ Row layout produced for every entity:
 import io
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, Protection
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TEMPLATE SPECS
@@ -119,7 +120,8 @@ TEMPLATE_SPECS: dict[str, dict] = {
             ("Credit Limits Panel", 10, "00B0F0"),           # blue
             ("Credit Check Panel", 9, "92D050"),             # green
             ("Payment & Accouting Profile", 6, "FFC000"),    # orange
-            ("Tax Panel", 14, "00B0F0"),                     # blue — includes trailing Data Operation / Status / Error, no separate banner for those
+            ("Tax Panel", 11, "00B0F0"),                     # blue
+            ("", 3),                                          # blank banner for loader
         ],
         "columns": [
             "Customer", "Active", "Customer Type", "Shared Set", "Site Code",
@@ -149,6 +151,7 @@ TEMPLATE_SPECS: dict[str, dict] = {
         "groups": [
             ("Main", 9, "92D050"),     # green
             ("Pricing", 10, "FFC000"),  # orange
+            ("", 3),                    # blank banner for loader
         ],
         "columns": [
             "Domain", "Price List", "Description", "Customer Code", "Item Code",
@@ -213,6 +216,10 @@ def build(entity_id: str) -> io.BytesIO:
     Row 1 = merged section banners (each group optionally colored via its own
     color_hex), Row 2 = column headers (fill optionally overridden per-entity
     via spec["header_fill"]), Row 3+ = forced no-fill data-entry area.
+    
+    Header rows (1-2) are locked; data rows (3+) are unlocked for editing.
+    Data Operation column includes a dropdown validation (C/U options, default C).
+    
     Raises ValueError if entity_id isn't in TEMPLATE_SPECS.
     """
     if entity_id not in TEMPLATE_SPECS:
@@ -247,26 +254,64 @@ def build(entity_id: str) -> io.BytesIO:
         cell.font = _SECTION_FONT
         cell.fill = fill
         cell.alignment = _CENTER
+        cell.protection = Protection(locked=True)
         for c in range(start_col, end_col + 1):
             ws.cell(row=1, column=c).border = _ALL_BORDER
             ws.cell(row=1, column=c).fill = fill
+            ws.cell(row=1, column=c).protection = Protection(locked=True)
         col_cursor = end_col + 1
 
     # ── Row 2: column headers ──
+    data_operation_col = None  # Track which column has "Data Operation"
     for idx, name in enumerate(columns, start=1):
         cell = ws.cell(row=2, column=idx, value=name)
         cell.font = _HEADER_FONT
         cell.fill = header_fill
         cell.alignment = _LEFT
         cell.border = _ALL_BORDER
+        cell.protection = Protection(locked=True)
         width = max(12, min(34, len(str(name)) + 4))
         ws.column_dimensions[get_column_letter(idx)].width = width
+        
+        # Track Data Operation column for dropdown
+        if name == "Data Operation":
+            data_operation_col = idx
 
-    # ── Row 3+: force no-fill so the data-entry area never inherits a header color ──
+    # ── Row 3+: force no-fill and UNLOCK for editing ──
     total_cols = len(columns)
     for r in range(3, 3 + _FORCE_WHITE_ROWS):
         for c in range(1, total_cols + 1):
-            ws.cell(row=r, column=c).fill = _NO_FILL
+            cell = ws.cell(row=r, column=c)
+            cell.fill = _NO_FILL
+            cell.protection = Protection(locked=False)
+
+    # ── ADD DATA VALIDATION DROPDOWN for "Data Operation" ──
+    if data_operation_col:
+        # Put C and U in hidden cells for the dropdown to reference
+        hidden_col = 100  # Far right, won't interfere
+        ws.cell(row=1, column=hidden_col, value="C")
+        ws.cell(row=2, column=hidden_col, value="U")
+        ws.column_dimensions[get_column_letter(hidden_col)].hidden = True
+        
+        # Reference those cells in the dropdown
+        hidden_range = f"{get_column_letter(hidden_col)}$1:${get_column_letter(hidden_col)}$2"
+        dv = DataValidation(
+            type="list",
+            formula1=hidden_range,
+            allow_blank=True,
+            showDropDown=False,
+            showErrorMessage=True,
+            errorTitle="Invalid Data Operation",
+            error="Please enter C (Create) or U (Update) only",
+        )
+        ws.add_data_validation(dv)
+        # Apply to all data rows (row 3 onwards)
+        col_letter = get_column_letter(data_operation_col)
+        dv.add(f"{col_letter}3:{col_letter}{3 + _FORCE_WHITE_ROWS - 1}")
+
+    # ── PROTECT SHEET (header rows locked, data rows editable) ──
+    ws.protection.sheet = True
+    ws.protection.enable()
 
     ws.row_dimensions[1].height = 20
     ws.row_dimensions[2].height = 30

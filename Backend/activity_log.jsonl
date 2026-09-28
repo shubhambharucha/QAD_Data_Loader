@@ -188,3 +188,84 @@
 {"timestamp": "2026-09-10T15:36:23", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "connection to server at \"10.0.54.52\", port 5432 failed: Connection timed out (0x0000274C/10060)\n\tIs the server running on that host and accepting TCP/IP connections?\n"}}
 {"timestamp": "2026-09-10T15:37:32", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
 {"timestamp": "2026-09-10T15:37:38", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-23T13:04:48", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-23T13:05:53", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-09-23T13:06:08", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-28T11:08:12", "username": "shubhambharucha@yash.com", "environment": "TEST", "action": "login", "status": "failed", "details": {"error": "400 Client Error:  for url: http://qadee.yash.com:22010/qad-central/oauth/token"}}
+{"timestamp": "2026-09-28T11:09:07", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:09:15", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:09:17", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_110916.xlsx"}}
+{"timestamp": "2026-09-28T11:10:09", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["PriceList"]}}
+{"timestamp": "2026-09-28T11:10:09", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "failed", "details": {"entities": ["PriceList"], "error": "Template generation failed: TEMPLATE_SPECS['PriceList'] groups/columns width mismatch"}}
+{"timestamp": "2026-09-28T11:16:05", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:16:08", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["PriceList"]}}
+{"timestamp": "2026-09-28T11:16:09", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["PriceList"], "filename": "PriceList_Blank_Template_20260928_111609.xlsx"}}
+{"timestamp": "2026-09-28T11:17:25", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:17:28", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:17:31", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_111731.xlsx"}}
+{"timestamp": "2026-09-28T11:25:27", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:25:50", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:25:52", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_112552.xlsx"}}
+{"timestamp": "2026-09-28T11:25:54", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["PriceList", "Supplier"]}}
+{"timestamp": "2026-09-28T11:25:59", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["PriceList", "Supplier"], "filename": "Blank_Templates_20260928_112559.zip"}}
+{"timestamp": "2026-09-28T11:28:54", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:29:08", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:29:12", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_112911.xlsx"}}
+{"timestamp": "2026-09-28T11:31:16", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:31:20", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:31:23", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_113122.xlsx"}}
+{"timestamp": "2026-09-28T11:33:20", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:33:23", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:33:27", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_113326.xlsx"}}
+{"timestamp": "2026-09-28T11:36:16", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:36:22", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:36:25", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_113625.xlsx"}}
+{"timestamp": "2026-09-28T11:38:13", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:38:16", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:38:20", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_113820.xlsx"}}
+{"timestamp": "2026-09-28T11:39:52", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:39:57", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_113956.xlsx"}}
+{"timestamp": "2026-09-28T11:40:48", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:40:55", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:40:58", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_114058.xlsx"}}
+{"timestamp": "2026-09-28T11:43:40", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T11:52:48", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:52:55", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:54:46", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:54:52", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:55:18", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:55:38", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:57:27", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T11:57:46", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:00:18", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:00:40", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:02:22", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:02:48", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:04:19", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:04:40", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:14:53", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-28T12:18:58", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T12:19:04", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:19:09", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_121908.xlsx"}}
+{"timestamp": "2026-09-28T12:20:50", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:21:04", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:21:07", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:21:17", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:22:52", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-28T12:23:22", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T12:23:38", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:23:43", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "blank_template", "status": "completed", "details": {"entities": ["Customer"], "filename": "Customer_Blank_Template_20260928_122343.xlsx"}}
+{"timestamp": "2026-09-28T12:25:02", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:25:07", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:25:18", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:25:25", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:25:29", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T12:25:46", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["Customer"]}}
+{"timestamp": "2026-09-28T14:54:01", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T15:04:00", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "logout", "status": "success", "details": null}
+{"timestamp": "2026-09-28T15:04:31", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "login", "status": "success"}
+{"timestamp": "2026-09-28T15:05:00", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "fetch", "status": "navigated", "details": null}
+{"timestamp": "2026-09-28T15:18:30", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "started", "details": {"entities": ["PurchaseOrder"]}}
+{"timestamp": "2026-09-28T15:18:35", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "validate", "status": "completed", "details": {"entities": ["PurchaseOrder"]}}
+{"timestamp": "2026-09-28T15:18:39", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "started", "details": {"entities": ["PurchaseOrder"]}}
+{"timestamp": "2026-09-28T15:18:44", "username": "shubham.bharucha@yash.com", "environment": "TEST", "action": "load", "status": "completed", "details": {"entities": ["PurchaseOrder"]}}
