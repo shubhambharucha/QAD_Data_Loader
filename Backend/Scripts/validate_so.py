@@ -92,7 +92,11 @@ def _check_date(value):
 def _validate_sheet(ws, rules, entity_col):
     """Validates a single sheet against the given rules. Returns per-sheet stats dict."""
 
-    raw_headers = [cell.value for cell in ws[1]]
+    raw_headers = []
+    for cell in ws[1]:
+        if cell.value is None:
+            break  # real headers are contiguous; stops before blank_template.py's hidden dropdown columns
+        raw_headers.append(cell.value)
     header_row  = [str(h).strip() if h is not None else "" for h in raw_headers]
 
     if "Status" not in header_row:
@@ -114,8 +118,12 @@ def _validate_sheet(ws, rules, entity_col):
     for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
         row_values = [cell.value for cell in row]
 
-        if not any(row_values):
-            rows_skipped += 1
+        if not any(row_values[:len(header_row)]):
+            # Genuinely empty pre-formatted template row — never counted as
+            # "skipped", that word is reserved for rows that HAD data but
+            # were already DONE (see below). Otherwise every blank template
+            # reports "499 rows skipped" even on a clean pass, which reads
+            # as an error when it isn't one.
             continue
 
         row_data = dict(zip(header_row, row_values))

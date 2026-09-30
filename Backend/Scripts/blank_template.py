@@ -23,27 +23,77 @@ Why this lives in Scripts/, not main.py:
     by main.py via load_module(). Blank Template follows the same shape, so
     adding/adjusting a template later never touches main.py — just this file.
 
-To add a new entity's template:
-    1. Add an entry to TEMPLATE_SPECS below with its "groups" (row-1 section
-       banners) and "columns" (row-2 headers), copied verbatim from a real
-       export/import file for that entity.
-    2. Each group is a (title, span) or (title, span, color_hex) tuple. If
-       you omit color_hex the group falls back to DEFAULT_SECTION_FILL (the
-       plain violet banner) — that's what Customer/PriceList still use.
-       Give a group its own color_hex to make it stand out, the way Supplier
-       now mirrors its real source file's green/orange/blue section banners.
-    3. Nothing else changes — main.py and index.html pick it up automatically
-       (index.html asks main.py for the supported list at load time).
+TWO SPEC SHAPES
+----------------------------------------------------------------------------
+This file supports two different TEMPLATE_SPECS shapes, because the
+loaders themselves use two different sheet layouts:
 
-Row layout produced for every entity:
-    Row 1 — merged "section" banner cells (grouping related columns),
-             each one colorable independently via the group's color_hex
-    Row 2 — the actual column headers that validate_<entity>.py / the load
-             script read (fill color configurable per-entity via
-             spec["header_fill"], defaults to DEFAULT_HEADER_FILL)
-    Row 3+ — left completely blank / no-fill for the user to type data into
-             (explicitly forced to no-fill so nothing inherits the header
-             colors when a user types or drags fill-down in Excel)
+1. BANNER shape (Supplier / Customer / PriceList) — row 1 = colored
+   section banners, row 2 = the actual column headers those loaders read
+   (Customer_load.py/Supplier_load.py/price_list_load.py all read row 2:
+   "Row 1 = section labels, Row 2 = column headers"), row 3+ = data.
+   Detected by the spec having a top-level "groups" key. UNCHANGED from
+   before — nothing about this path was touched.
+
+   To add a new BANNER-style entity:
+     a. Add an entry with "groups" (row-1 section spans) and "columns"
+        (row-2 headers), copied verbatim from a real export/import file.
+     b. Each group is (title, span) or (title, span, color_hex). Omit
+        color_hex to fall back to DEFAULT_SECTION_FILL.
+     c. Nothing else changes — main.py and index.html pick it up
+        automatically.
+
+2. FLAT shape (Site / Location / PurchaseOrder / SalesOrder) — row 1 IS
+   the column header row (no banner), row 2+ = data. This matches how
+   site_load.py / location_load.py / po_load.py / so_load.py themselves
+   read their files (ws[1] = headers, not ws[2]) — a BANNER-shaped
+   template would be actively wrong for these, since the loader would
+   try to read the banner text as field names.
+
+   Detected by the spec having a top-level "sheets" key: a list of one
+   sheet-spec per worksheet (one entry for Site/Location's single sheet,
+   two for PurchaseOrder/SalesOrder's Header + Lines). Each sheet-spec:
+     - sheet_name       worksheet title ("Sheet1", "Header", "Lines", ...)
+     - columns           row-1 headers, in order, EXACTLY matching what
+                          the loader's own sv()/row_data.get() calls read
+                          (not necessarily what an old sample file has —
+                          see the SalesOrder "Currency Code" note below)
+     - header_fill        optional 6-char hex for the header row (falls
+                           back to DEFAULT_HEADER_FILL if omitted)
+     - no_fill_columns     optional set/list of column names that should
+                           NOT get header_fill — e.g. {"Data operation",
+                           "Status", "Error"} — still bordered, just
+                           left white so they read as "loader-only", not
+                           something the user fills in
+     - dropdowns          optional {column_name: {"options": [...],
+                           "error_title": "...", "error_msg": "..."}} —
+                           each becomes an Excel list-validation dropdown
+                           restricted to exactly those options, backed by
+                           a hidden column on that same sheet (one hidden
+                           column per dropdown, auto-allocated so multiple
+                           dropdowns on one sheet never collide)
+
+   To add a new FLAT-style entity: add a "sheets" list following the
+   shape above. Column names MUST match what the load script actually
+   reads (grep its sv(row_data, "...") / row_data.get("...") calls) —
+   copying a sample .xlsx's headers isn't safe here the way it is for
+   Supplier, because at least one existing sample (SalesOrder's HP.xlsx)
+   has a column name ("Currency") that doesn't match what so_load.py
+   actually reads ("Currency Code") — that's a pre-existing mismatch in
+   that sample file, not something to replicate.
+
+Row layout — BANNER shape:
+    Row 1 — merged section banner cells (grouping related columns)
+    Row 2 — the column headers the loader reads
+    Row 3+ — blank / no-fill, freeze_panes = "A3"
+
+Row layout — FLAT shape:
+    Row 1 — the column headers the loader reads (yellow by default, with
+             no_fill_columns left white)
+    Row 2+ — blank / no-fill, freeze_panes = "A2"
+
+Both shapes: header row(s) locked (sheet-protected), data rows explicitly
+unlocked so the user can still type into a protected sheet.
 """
 
 import io
@@ -161,6 +211,212 @@ TEMPLATE_SPECS: dict[str, dict] = {
             "List Price", "Break category", "Data Operation", "Status ", "Error",
         ],
     },
+
+    # ── FLAT-shape entities below (row 1 = headers, no banner row) ────────
+    # See the module docstring's "TWO SPEC SHAPES" section. Column names
+    # here are verified against each loader's own sv(row_data, "...") /
+    # row_data.get("...") calls, not copied blind from a sample file.
+
+    "Site": {
+        "file_prefix": "Site",
+        "sheets": [
+            {
+                "sheet_name": "Sheet1",
+                "header_fill": "FFFF00",  # yellow — same theme as every other entity
+                "no_fill_columns": {"Data operation", "Status", "Error"},
+                "columns": [
+                    "Domain", "Entity", "Site", "Description",
+                    "Default inventory status", "Data operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                    "Default inventory status": {
+                        "options": [
+                            "Expired", "N-N-N", "N-N-Y", "N-Y-N", "N-Y-Y",
+                            "Y-N-N", "Y-N-Y", "Y-Y-N", "Y-Y-Y",
+                        ],
+                        "error_title": "Invalid inventory status",
+                        "error_msg": "Please pick one of the listed inventory status combinations",
+                    },
+                },
+            },
+        ],
+    },
+
+    "Location": {
+        "file_prefix": "Location",
+        "sheets": [
+            {
+                "sheet_name": "Sheet1",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "Site", "Location", "Description", "Inventory Status",
+                    "Location Type", "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                    # "default" (see location_load.py) means: don't send
+                    # inventoryStatusCode at all — QAD inherits the site's
+                    # own default, same as leaving it blank on the manual
+                    # Location Maintenance screen.
+                    "Inventory Status": {
+                        "options": [
+                            "Expired", "N-N-N", "N-N-Y", "N-Y-N", "N-Y-Y",
+                            "Y-N-N", "Y-N-Y", "Y-Y-N", "Y-Y-Y", "default",
+                        ],
+                        "error_title": "Invalid inventory status",
+                        "error_msg": "Please pick one of the listed inventory status combinations, or 'default' to inherit the site's own default",
+                    },
+                },
+            },
+        ],
+    },
+
+    "PurchaseOrder": {
+        "file_prefix": "PurchaseOrder",
+        "sheets": [
+            {
+                # Columns verified against po_load.py's build_header_payload()
+                # sv(row_data, "...") calls, matching the order and names
+                # already used in the real PO_testing.xlsx / error_Kangaroo.xlsx
+                # sample files (both already in Data/PurchaseOrder /
+                # Data/FILES_COPIES) — those match po_load.py exactly, unlike
+                # SalesOrder's sample (see below). "Ship Via" is present in
+                # those real files but is NOT currently read by po_load.py —
+                # kept here for parity with the real files; harmless no-op
+                # until/unless po_load.py is extended to use it.
+                "sheet_name": "Header",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "PO Number", "Domain Code", "Supplier Code", "Currency",
+                    "Credit Terms", "Daybook Set", "Ship To Site", "Bill To Code",
+                    "Ship Via", "Order Date", "Due Date",
+                    "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                },
+            },
+            {
+                # Verified against po_load.py's create_line() sv()/fv() calls.
+                # "Domain Code" is present in the real sample files' Lines
+                # sheet too, but po_load.py takes domain from the HEADER row
+                # only (create_line(domain, po_num, ...)) — the Lines-sheet
+                # column, if present, is never read. Kept for parity with
+                # the real files; harmless.
+                "sheet_name": "Lines",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "PO Number", "Domain Code", "Item Code", "Site Code",
+                    "Quantity Ordered", "Unit Price",
+                    "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                },
+            },
+        ],
+    },
+
+    "SalesOrder": {
+        "file_prefix": "SalesOrder",
+        "sheets": [
+            {
+                # IMPORTANT: "Currency Code" here, not "Currency". so_load.py
+                # reads sv(row_data, "Currency Code") — the real HP.xlsx
+                # sample file actually has a column named "Currency" (no
+                # "Code"), which is a pre-existing mismatch in that sample:
+                # every row in HP.xlsx currently fails so_load.py's own
+                # mandatory-field check on this field. This template uses
+                # the name the loader actually reads, not the sample's.
+                "sheet_name": "Header",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "Domain Code", "SO Number", "Sold To Customer Code",
+                    "Bill To Customer Code", "Ship To Customer Code", "Site Code",
+                    "Currency Code", "Daybook Set", "Credit Terms",
+                    "Order Date", "Due Date", "Ship Via", "Freight List", "Freight Terms",
+                    "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                },
+            },
+            {
+                # Verified against so_load.py's create_line() sv()/fv() calls.
+                # "Line Number" is supported (an explicit override) but
+                # optional — omitted here to match the real HP.xlsx sample;
+                # so_load.py falls back to sequential position when absent.
+                "sheet_name": "Lines",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "SO Number", "Item Code", "Site Code", "Quantity Ordered",
+                    "List Price", "Discount", "Net Price", "Due Date",
+                    "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                },
+            },
+        ],
+    },
+
+    "ReceiptsUnplanned": {
+        # Flat single-sheet, one row = one complete receipt — confirmed
+        # with the requester that unplannedReceives has no real multi-line
+        # flow despite the API's header/detail grid shape (see
+        # receipts-unplanned_load.py's module docstring). Columns verified
+        # against that loader's own sv()/fv() reads, not a sample file —
+        # there wasn't one for this entity, only live network captures.
+        "file_prefix": "ReceiptsUnplanned",
+        "sheets": [
+            {
+                "sheet_name": "Sheet1",
+                "header_fill": "FFFF00",
+                "no_fill_columns": {"Data Operation", "Status", "Error"},
+                "columns": [
+                    "Domain", "Site", "Item Code", "Quantity",
+                    "Data Operation", "Status", "Error",
+                ],
+                "dropdowns": {
+                    "Data Operation": {
+                        "options": ["C", "U"],
+                        "error_title": "Invalid Data Operation",
+                        "error_msg": "Please enter C (Create) or U (Update) only",
+                    },
+                },
+            },
+        ],
+    },
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -201,6 +457,38 @@ def _header_fill(color_hex: str | None) -> PatternFill:
     return PatternFill("solid", fgColor=color_hex) if color_hex else DEFAULT_HEADER_FILL
 
 
+def _add_dropdown(
+    ws, col_idx: int, options: list[str], error_title: str, error_msg: str,
+    hidden_col: int, data_start_row: int, data_end_row: int,
+) -> None:
+    """
+    Restrict one column (data_start_row..data_end_row) to a fixed list of
+    options via Excel data validation. The option list itself is written
+    into a hidden column on the same sheet (openpyxl/Excel list validation
+    needs a real cell range, not an inline literal list, once you're past
+    a handful of short options) — hidden_col must be unique per dropdown
+    on a given sheet; callers allocate sequentially (100, 101, 102, ...)
+    so multiple dropdowns on one sheet never collide.
+    """
+    for i, opt in enumerate(options, start=1):
+        ws.cell(row=i, column=hidden_col, value=opt)
+    ws.column_dimensions[get_column_letter(hidden_col)].hidden = True
+
+    hidden_range = f"{get_column_letter(hidden_col)}$1:${get_column_letter(hidden_col)}${len(options)}"
+    dv = DataValidation(
+        type="list",
+        formula1=hidden_range,
+        allow_blank=True,
+        showDropDown=False,
+        showErrorMessage=True,
+        errorTitle=error_title,
+        error=error_msg,
+    )
+    ws.add_data_validation(dv)
+    col_letter = get_column_letter(col_idx)
+    dv.add(f"{col_letter}{data_start_row}:{col_letter}{data_end_row}")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PUBLIC API  —  called from main.py
 # ═════════════════════════════════════════════════════════════════════════════
@@ -210,31 +498,20 @@ def supported_entities() -> list[str]:
     return list(TEMPLATE_SPECS.keys())
 
 
-def build(entity_id: str) -> io.BytesIO:
+def _build_banner_sheet(wb: Workbook, spec: dict) -> None:
     """
-    Build a blank (headers-only) workbook for `entity_id`, entirely in memory.
-    Row 1 = merged section banners (each group optionally colored via its own
-    color_hex), Row 2 = column headers (fill optionally overridden per-entity
-    via spec["header_fill"]), Row 3+ = forced no-fill data-entry area.
-    
-    Header rows (1-2) are locked; data rows (3+) are unlocked for editing.
-    Data Operation column includes a dropdown validation (C/U options, default C).
-    
-    Raises ValueError if entity_id isn't in TEMPLATE_SPECS.
+    ORIGINAL layout, UNCHANGED: row 1 = merged section banners, row 2 =
+    column headers, row 3+ = forced no-fill data-entry area. Used by
+    Supplier / Customer / PriceList (specs with a "groups" key).
     """
-    if entity_id not in TEMPLATE_SPECS:
-        raise ValueError(f"No blank template available for entity '{entity_id}'")
-
-    spec    = TEMPLATE_SPECS[entity_id]
     columns = spec["columns"]
     groups  = spec["groups"]
 
     if sum(span for _, span, *_ in groups) != len(columns):
         # Defensive check — keeps a future typo in TEMPLATE_SPECS from
         # silently producing a misaligned banner row instead of failing loudly.
-        raise ValueError(f"TEMPLATE_SPECS['{entity_id}'] groups/columns width mismatch")
+        raise ValueError("groups/columns width mismatch")
 
-    wb = Workbook()
     ws = wb.active
     ws.title = spec["sheet_name"]
 
@@ -272,7 +549,7 @@ def build(entity_id: str) -> io.BytesIO:
         cell.protection = Protection(locked=True)
         width = max(12, min(34, len(str(name)) + 4))
         ws.column_dimensions[get_column_letter(idx)].width = width
-        
+
         # Track Data Operation column for dropdown
         if name == "Data Operation":
             data_operation_col = idx
@@ -287,35 +564,98 @@ def build(entity_id: str) -> io.BytesIO:
 
     # ── ADD DATA VALIDATION DROPDOWN for "Data Operation" ──
     if data_operation_col:
-        # Put C and U in hidden cells for the dropdown to reference
-        hidden_col = 100  # Far right, won't interfere
-        ws.cell(row=1, column=hidden_col, value="C")
-        ws.cell(row=2, column=hidden_col, value="U")
-        ws.column_dimensions[get_column_letter(hidden_col)].hidden = True
-        
-        # Reference those cells in the dropdown
-        hidden_range = f"{get_column_letter(hidden_col)}$1:${get_column_letter(hidden_col)}$2"
-        dv = DataValidation(
-            type="list",
-            formula1=hidden_range,
-            allow_blank=True,
-            showDropDown=False,
-            showErrorMessage=True,
-            errorTitle="Invalid Data Operation",
-            error="Please enter C (Create) or U (Update) only",
+        _add_dropdown(
+            ws, data_operation_col, ["C", "U"],
+            "Invalid Data Operation",
+            "Please enter C (Create) or U (Update) only",
+            hidden_col=100,
+            data_start_row=3, data_end_row=3 + _FORCE_WHITE_ROWS - 1,
         )
-        ws.add_data_validation(dv)
-        # Apply to all data rows (row 3 onwards)
-        col_letter = get_column_letter(data_operation_col)
-        dv.add(f"{col_letter}3:{col_letter}{3 + _FORCE_WHITE_ROWS - 1}")
 
-    # ── PROTECT SHEET (header rows locked, data rows editable) ──
     ws.protection.sheet = True
     ws.protection.enable()
 
     ws.row_dimensions[1].height = 20
     ws.row_dimensions[2].height = 30
     ws.freeze_panes = "A3"   # keep both header rows visible while scrolling data
+
+
+def _build_flat_sheet(wb: Workbook, sheet_spec: dict, is_first: bool) -> None:
+    """
+    NEW layout: row 1 IS the column header row (no banner), row 2+ = forced
+    no-fill data-entry area. Used by Site / Location / PurchaseOrder /
+    SalesOrder (specs with a "sheets" key) — matches how those loaders
+    themselves read row 1 as the header row.
+    """
+    ws = wb.active if is_first else wb.create_sheet()
+    ws.title = sheet_spec["sheet_name"]
+
+    columns         = sheet_spec["columns"]
+    header_fill     = _header_fill(sheet_spec.get("header_fill"))
+    no_fill_columns = set(sheet_spec.get("no_fill_columns", []))
+
+    # ── Row 1: column headers (no_fill_columns left white, still bordered) ──
+    for idx, name in enumerate(columns, start=1):
+        cell = ws.cell(row=1, column=idx, value=name)
+        cell.font = _HEADER_FONT
+        cell.fill = _NO_FILL if name in no_fill_columns else header_fill
+        cell.alignment = _LEFT
+        cell.border = _ALL_BORDER
+        cell.protection = Protection(locked=True)
+        width = max(12, min(34, len(str(name)) + 4))
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    # ── Row 2+: force no-fill and UNLOCK for editing ──
+    total_cols = len(columns)
+    for r in range(2, 2 + _FORCE_WHITE_ROWS):
+        for c in range(1, total_cols + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.fill = _NO_FILL
+            cell.protection = Protection(locked=False)
+
+    # ── Dropdowns — one hidden helper column each, auto-allocated ──
+    hidden_col = 100
+    for col_name, dd in sheet_spec.get("dropdowns", {}).items():
+        if col_name not in columns:
+            continue
+        col_idx = columns.index(col_name) + 1
+        options = dd["options"]
+        _add_dropdown(
+            ws, col_idx, options,
+            dd.get("error_title", f"Invalid {col_name}"),
+            dd.get("error_msg", f"Choose one of: {', '.join(options)}"),
+            hidden_col=hidden_col,
+            data_start_row=2, data_end_row=2 + _FORCE_WHITE_ROWS - 1,
+        )
+        hidden_col += 1
+
+    ws.protection.sheet = True
+    ws.protection.enable()
+
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A2"   # keep the single header row visible while scrolling data
+
+
+def build(entity_id: str) -> io.BytesIO:
+    """
+    Build a blank (headers-only) workbook for `entity_id`, entirely in
+    memory. Dispatches to the BANNER layout (Supplier/Customer/PriceList —
+    spec has "groups") or the FLAT layout (Site/Location/PurchaseOrder/
+    SalesOrder — spec has "sheets") — see the module docstring.
+
+    Raises ValueError if entity_id isn't in TEMPLATE_SPECS.
+    """
+    if entity_id not in TEMPLATE_SPECS:
+        raise ValueError(f"No blank template available for entity '{entity_id}'")
+
+    spec = TEMPLATE_SPECS[entity_id]
+    wb   = Workbook()
+
+    if "sheets" in spec:
+        for i, sheet_spec in enumerate(spec["sheets"]):
+            _build_flat_sheet(wb, sheet_spec, is_first=(i == 0))
+    else:
+        _build_banner_sheet(wb, spec)
 
     buf = io.BytesIO()
     wb.save(buf)

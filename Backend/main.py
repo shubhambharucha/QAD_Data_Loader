@@ -184,14 +184,32 @@ ENTITY_MAP: dict[str, dict] = {
     "BOM": {
         "validate_script": "validate_bom",
         "load_script":     "bom_load",
-        "folder_key":      "bom",
+        "folder_key":      "BOM",
         "archive_folder":  "BOM",
+    },
+    "Site": {
+        "validate_script": "validate_site",
+        "load_script":     "site_load",
+        "folder_key":      "site",
+        "archive_folder":  "Site",
+    },
+    "Location": {
+        "validate_script": "validate_location",
+        "load_script":     "location_load",
+        "folder_key":      "location",
+        "archive_folder":  "Location",
+    },
+    "ReceiptsUnplanned": {
+        "validate_script": "validate_receipts_unplanned",
+        "load_script":     "receipts_unplanned_load",
+        "folder_key":      "receipts_unplanned",
+        "archive_folder":  "ReceiptsUnplanned",
     },
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FASTAPI APP
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 
 app = FastAPI(title="QAD Data Loader")
 

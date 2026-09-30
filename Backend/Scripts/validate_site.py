@@ -1,3 +1,19 @@
+"""
+validate_site.py
+-----------------
+Structural, local-only validation for Site workbooks (row 1 = headers,
+same single-sheet layout site_load.py reads) — no QAD calls, same
+contract as every other validate_<entity>.py: validate(file_path) -> dict
+with has_errors / rows_processed / rows_passed / rows_failed / rows_skipped,
+marking each row READY or ERROR in the Status/Error columns so the Load
+step downstream only has to re-check DONE, not redo structural checks.
+
+Field max_len values mirror the codebase's existing convention for QAD
+code fields (8 chars — see validate_po.py's Domain Code / Supplier Code)
+and the exact "Y-N-Y" / "N-N-N" width for Default inventory status seen
+in both Site_sample.xlsx and the captured /sites response.
+"""
+
 import openpyxl
 from openpyxl.styles import PatternFill
 
@@ -5,29 +21,47 @@ RED_FILL   = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="so
 CLEAR_FILL = PatternFill(fill_type=None)
 
 FIELD_RULES = {
-    "Customer":            {"type": "character", "max_len": 8},
-    "Shared Set":          {"type": "character", "max_len": 20},
-    "Business Relation":   {"type": "character", "max_len": 20},
-    "Active":              {"type": "logical",   "max_len": None},
-    "Currency":            {"type": "character", "max_len": 3},
-    "Credit Terms":        {"type": "character", "max_len": 8},
-    "Invoice Status":      {"type": "character", "max_len": 20},
-    "Invoice Control GL Profile": {"type": "character", "max_len": 20},
-    "Credit Note Control GL Profile": {"type": "character", "max_len": 20},
-    "Prepayment Control GL Profile": {"type": "character", "max_len": 20},
-    "Sales Account GL Profile": {"type": "character", "max_len": 20},
+    "Domain":                    {"type": "character", "max_len": 8},
+    "Entity":                    {"type": "character", "max_len": 8},
+    "Site":                      {"type": "character", "max_len": 8},
+    "Description":               {"type": "character", "max_len": 40},
+    "Default inventory status":  {"type": "enum", "options": {
+        "Expired", "N-N-N", "N-N-Y", "N-Y-N", "N-Y-Y",
+        "Y-N-N", "Y-N-Y", "Y-Y-N", "Y-Y-Y",
+    }},
 }
 
-ENTITY_COL    = "Customer"
-VALID_LOGICAL = {"yes", "no"}
+ENTITY_COL    = "Site"
 SKIP_STATUSES = {"DONE", "READY"}
+
+
+def _check_char(value, max_len):
+    if value is None or str(value).strip() == "" or str(value).strip().lower() == "none":
+        return "empty"
+    sv = str(value).strip()
+    if max_len and len(sv) > max_len:
+        return f"max {max_len} chars (got {len(sv)})"
+    return None
+
+
+def _check_enum(value, options):
+    if value is None or str(value).strip() == "" or str(value).strip().lower() == "none":
+        return "empty"
+    sv = str(value).strip()
+    if sv not in options:
+        return f"must be one of {sorted(options)} (got '{sv}')"
+    return None
 
 
 def validate(file_path):
     wb = openpyxl.load_workbook(file_path)
     ws = wb.active
 
-    raw_headers = [cell.value for cell in ws[2]]
+    raw_headers = []
+    for cell in ws[1]:
+        if cell.value is None:
+            break  # real headers are contiguous; stops before blank_template.py's hidden dropdown columns
+        raw_headers.append(cell.value)
     header_row  = [str(h).strip() if h is not None else "" for h in raw_headers]
 
     if "Status" not in header_row:
@@ -40,8 +74,8 @@ def validate(file_path):
     if ENTITY_COL not in header_row:
         raise ValueError(f"Required column missing: {ENTITY_COL}")
 
-    status_col_idx = header_row.index("Status")   + 1
-    error_col_idx  = header_row.index("Error")    + 1
+    status_col_idx = header_row.index("Status") + 1
+    error_col_idx  = header_row.index("Error")  + 1
     entity_col_idx = header_row.index(ENTITY_COL) + 1
 
     has_errors     = False
@@ -50,10 +84,10 @@ def validate(file_path):
     rows_failed    = 0
     rows_skipped   = 0
 
-    for row_idx, row in enumerate(ws.iter_rows(min_row=3), start=3):
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
         row_values = [cell.value for cell in row]
 
-        if not any(row_values):
+        if not any(row_values[:len(header_row)]):
             # Genuinely empty pre-formatted template row — never counted as
             # "skipped", that word is reserved for rows that HAD data but
             # were already DONE (see below). Otherwise every blank template
@@ -76,34 +110,25 @@ def validate(file_path):
             if col_name not in header_row:
                 continue
 
-            col_idx  = header_row.index(col_name) + 1
-            value    = row_data.get(col_name)
-            str_val  = str(value).strip() if value is not None else ""
-            is_empty = str_val == "" or str_val.lower() == "none"
+            col_idx = header_row.index(col_name) + 1
+            value   = row_data.get(col_name)
 
-            if is_empty:
-                row_errors.append(f"{col_name}: empty")
-                error_cell_idxs.append(col_idx)
-                continue
+            if rule["type"] == "enum":
+                err = _check_enum(value, rule["options"])
+            else:
+                err = _check_char(value, rule.get("max_len"))
 
-            if rule["type"] == "logical":
-                if str_val.lower() not in VALID_LOGICAL:
-                    row_errors.append(f"{col_name}: must be Yes or No (got '{str_val}')")
-                    error_cell_idxs.append(col_idx)
-                continue
-
-            max_len = rule.get("max_len")
-            if max_len and len(str_val) > max_len:
-                row_errors.append(f"{col_name}: max {max_len} chars (got {len(str_val)})")
+            if err:
+                row_errors.append(f"{col_name}: {err}")
                 error_cell_idxs.append(col_idx)
 
         for cell in ws[row_idx]:
             cell.fill = CLEAR_FILL
 
         if row_errors:
-            has_errors = True
+            has_errors   = True
             rows_failed += 1
-            error_msg   = "; ".join(row_errors)
+            error_msg    = "; ".join(row_errors)
 
             ws.cell(row=row_idx, column=entity_col_idx).fill = RED_FILL
             for cidx in error_cell_idxs:
@@ -130,23 +155,20 @@ def validate(file_path):
 # Standalone testing mode
 # ---------------------------------------------------------------------------
 def run_standalone():
-
     import sys
     import os
 
-    #Temporary fix for standalone execution in cmd
     ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
     sys.path.append(ROOT_DIR)
 
     from config import CONFIG
 
-    folder = os.path.abspath(os.path.join(ROOT_DIR, CONFIG["folders"]["customer"]))
+    folder = os.path.abspath(os.path.join(ROOT_DIR, CONFIG["folders"]["site"]))
 
     if not os.path.exists(folder):
         print(f"ERROR: Folder not found: {folder}")
         sys.exit(1)
-    
+
     xlsx_files = [f for f in os.listdir(folder) if f.endswith(".xlsx") and not f.startswith("~$")]
 
     if not xlsx_files:
@@ -154,12 +176,10 @@ def run_standalone():
         sys.exit(1)
 
     total_processed = 0
-    total_failed   = 0
+    total_failed    = 0
 
     for file_name in xlsx_files:
-
         file_path = os.path.join(folder, file_name)
-
         print(f"Validating: {file_path} ...")
 
         result = validate(file_path)
@@ -179,8 +199,8 @@ def run_standalone():
         else:
             print("\nValidation PASSED — all rows are READY for Loading.")
 
-    #outside loop    
     sys.exit(0 if total_failed == 0 else 1)
+
 
 if __name__ == "__main__":
     run_standalone()

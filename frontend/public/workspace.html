@@ -233,7 +233,7 @@ table.rt tr:hover td{background:rgba(255,255,255,.015)}
             <span class="spinner" id="sp-f" style="display:none"></span>
             Fetch
           </button>
-          <button class="a-btn" id="btn-t" disabled title="Blank Template is available for Supplier, Customer and Price List">
+          <button class="a-btn" id="btn-t" disabled title="Blank Template is available for all modules except Product Structure BOM (coming soon)">
             <span class="spinner" id="sp-t" style="display:none"></span>
             Blank Template
           </button>
@@ -359,20 +359,29 @@ const Terminal={
   clear(){this.body.innerHTML='';this.lines=[];this.lastProgressLine=null;}
 };
 
-/* ── ENTITIES ── */
+/* ── ENTITIES ──
+   Curated + ordered for today's demo: Purchase Order, Sales Order, Site,
+   Location, Product Structure BOM, Customer, Supplier, Price List — in
+   that exact order. Everything else that used to be here (GCM, BR,
+   Customer_Item, ProductionOrder, Supplier_Item, SupplierPriceList) is
+   just removed from this array, not deleted anywhere else — main.py's
+   ENTITY_MAP still knows about them, so they're one line each to bring
+   back later, not rebuilt from scratch.
+
+   'id' MUST match the entity id main.py's ENTITY_MAP uses exactly (it's
+   what gets sent to /api/validate, /api/load, /api/blank-template). Only
+   BOM's 'label' (display text) was changed, per request — its id stays
+   'BOM' to match the backend. */
 const ENTITIES=[
-  {id:'Supplier',label:'Supplier',sub:'Vendors, contracts',icon:'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'},
+  {id:'PurchaseOrder',label:'Purchase Order',sub:'PO headers & lines',icon:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8'},
+  {id:'SalesOrder',label:'Sales Order',sub:'SO headers & lines',icon:'M21 16V8a2 2 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z'},
+  {id:'Site',label:'Site',sub:'Site master data',icon:'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'},
+  {id:'Location',label:'Location',sub:'Warehouse location master',icon:'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'},
+  {id:'ReceiptsUnplanned',label:'Unplanned Receipts',sub:'Directly adjust on-hand stock for un-ordered material.',icon:'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'},
+  {id:'BOM',label:'Product Structure BOM',sub:'Product Structure and Formulas',icon:'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'},
   {id:'Customer',label:'Customer',sub:'Accounts, addresses',icon:'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'},
-  {id:'GCM',label:'GCM',sub:'Global cost masters',icon:'M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z'},
-  {id:'BR',label:'BR',sub:'Business relations',icon:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'},
-  {id:'Customer_Item',label:'Customer Item',sub:'Item cross-refs',icon:'M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0'},
-  {id:'ProductionOrder',label:'ProductionOrder',sub:'Production headers',icon:'M22 12h-4l-3 9L9 3l-3 9H2'},
-  {id:'PurchaseOrder',label:'PurchaseOrder',sub:'PO headers & lines',icon:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8'},
-  {id:'SalesOrder',label:'SalesOrder',sub:'SO headers & lines',icon:'M21 16V8a2 2 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z'},
-  {id:'Supplier_Item',label:'Supplier Item',sub:'Supplier item refs',icon:'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01'},
-  {id:'SupplierPriceList',label:'SupplierPriceList',sub:'Supplier prices',icon:'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6'},
+  {id:'Supplier',label:'Supplier',sub:'Vendors, contracts',icon:'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'},
   {id:'PriceList',label:'Price List',sub:'Customer / Item Pricing',icon:'M20.59 13.41L11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.82 0l7.17-7.17a2 2 0 0 0 .42-2.83zM7 7h.01'},
-  {id:'BOM',label:'BOM',sub:'Product Structure and Formulas',icon:'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'},
 ];
 
 const grid=document.getElementById('e-grid');
@@ -410,8 +419,10 @@ const results={};
 
 /* Entities for which a blank template can currently be generated server-side.
    Source of truth is Scripts/blank_template.py on the backend — this starter
-   list is just a fallback in case that lookup hasn't resolved yet (or fails). */
-let TEMPLATE_ENTITIES=['Supplier','Customer','PriceList'];
+   list is just a fallback in case that lookup hasn't resolved yet (or fails).
+   Kept in sync with blank_template.py's current TEMPLATE_SPECS (everything
+   on today's card list except Product Structure BOM, which is on hold). */
+let TEMPLATE_ENTITIES=['Supplier','Customer','PriceList','Site','Location','PurchaseOrder','SalesOrder'];
 
 (async function loadTemplateEntities(){
   try{

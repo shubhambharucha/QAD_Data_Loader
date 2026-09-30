@@ -24,7 +24,10 @@
     "supplier_item": "D:\\QAD_data_loader\\Data\\Supplier_Item",
     "supplier_price_list": "D:\\QAD_data_loader\\Data\\SupplierPriceList",
     "price_list": "D:\\QAD_data_loader\\Data\\PriceList",
-    "BOM": "D:\\QAD_data_loader\\Data\\Data/BOM"
+    "BOM": "D:\\QAD_data_loader\\Data\\BOM",
+    "site": "D:\\QAD_data_loader\\Data\\Site",
+    "location": "D:\\QAD_data_loader\\Data\\Location",
+    "receipts_unplanned": "D:\\QAD_data_loader\\Data\\ReceiptsUnplanned"
   },
   "permissions": {
     "entity_uri_map": {
@@ -39,7 +42,9 @@
       "Supplier_Item": "",
       "SupplierPriceList": "",
       "PriceList": "",
-      "BOM": ""
+      "BOM": "",
+      "Site": "urn:view:hybridbrowse:com.qad.erp.base.sites",
+      "Location": "urn:view:hybridbrowse:com.qad.erp.inventory.locationMasters"
     },
     "required_actions": [
       "WRITE",

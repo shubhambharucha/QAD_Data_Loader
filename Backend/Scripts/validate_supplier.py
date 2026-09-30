@@ -98,10 +98,13 @@ def validate(file_path):
         row_values = [cell.value for cell in row]
 
         # ---------------------------------------------------------------
-        # Skip fully empty rows
+        # Fully empty pre-formatted template row — never counted as
+        # "skipped", that word is reserved for rows that HAD data but were
+        # already DONE (see below). Otherwise every blank template reports
+        # "499 rows skipped" even on a clean pass, which reads as an error
+        # when it isn't one.
         # ---------------------------------------------------------------
         if not any(row_values):
-            rows_skipped += 1
             continue
 
         row_data = dict(zip(header_row, row_values))

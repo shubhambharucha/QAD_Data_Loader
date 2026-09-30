@@ -7,9 +7,13 @@ purchaseOrderLines APIs.
 
 Behaviour
 ---------
-- Reads base_url and auth from config.json (via config.py)
-- Fetches one OAuth token per run; refreshes automatically on 401
-  (unchanged token pattern: api_get()/api_post() retry once internally)
+- Uses the OAuth token already obtained at login (held server-side in
+  main.py's SESSIONS store) — this script no longer fetches its own token
+  from config, because config.json no longer contains service-account
+  credentials (see TokenManager notes below). base_url is likewise taken
+  from the logged-in session's environment (tm.base_url), not a module-
+  level constant, so PO now correctly follows TEST vs PROD like every
+  other loader instead of always hitting TEST.
 - Skips rows with Status = DONE
 - Error/response handling now shares the same framework as
   Customer_load.py:
@@ -80,23 +84,40 @@ from config import CONFIG
 from excel_format_utils import RED_FILL, CLEAR_FILL, mark_done, mark_error, resolve_qad_errors
 from qad_response_utils import normalize_response
 
-# ── Get environment from argument or default to TEST ────────────────────
+# ── API endpoint templates ──────────────────────────────────────────────
+#
+# CHANGED (see explanation in chat): these used to be built once at import
+# time from a module-level _BASE_URL, itself resolved from sys.argv[1] /
+# CONFIG["environments"][...]. That meant PO silently always hit TEST
+# whenever it was imported as a module (main.py never passes argv), no
+# matter which environment the logged-in user actually selected.
+#
+# Now each is a small function that takes base_url explicitly, supplied by
+# the caller (process_file / create_line) from tm.base_url — the same
+# base_url the session's token was issued against. This mirrors
+# Customer_load.py's pattern exactly.
 
-# Default to TEST for testing — pass "PROD" as argument to use production
-ENVIRONMENT = sys.argv[1].upper() if len(sys.argv) > 1 else "TEST"
-if ENVIRONMENT not in CONFIG.get("environments", {}):
-    raise RuntimeError(f"Invalid environment '{ENVIRONMENT}'. Available: {list(CONFIG.get('environments', {}).keys())}")
-print(f"[INFO] Using environment: {ENVIRONMENT}")
- 
-_QAD_CONFIG = CONFIG["environments"][ENVIRONMENT]
-_BASE_URL = _QAD_CONFIG["base_url"]
+def _header_url(base_url: str) -> str:
+    return f"{base_url}/api/erp/purchaseOrderHeaders?viewUri=urn:be:com.qad.purchasing.purchaseorders.IPurchaseOrderHeader"
 
-# ── API endpoint templates (UNCHANGED) ─────────────────────────────────────
-HEADER_URL       = f"{_BASE_URL}/api/erp/purchaseOrderHeaders?viewUri=urn:be:com.qad.purchasing.purchaseorders.IPurchaseOrderHeader"
-INIT_LINE_URL    = f"{_BASE_URL}/api/erp/purchaseOrderLinesGrid?initialize=true&domainCode={{domain}}&purchaseOrderNumber={{po}}"
-FIELD_CHANGE_URL = f"{_BASE_URL}/api/erp/purchaseOrderLines/fieldChangeV2?fieldName={{fieldName}}"
-IS_RECEIVED_URL  = f"{_BASE_URL}/api/erp/purchaseOrderLines/isReceivedPurchaseOrderLineV2?domainCode={{domain}}&purchaseOrderNumber={{po}}&purchaseOrderLine={{line}}"
-SYNC_LINE_URL    = f"{_BASE_URL}/api/erp/purchaseOrderLinesGrid"
+
+def _init_line_url(base_url: str, domain: str, po: str) -> str:
+    return f"{base_url}/api/erp/purchaseOrderLinesGrid?initialize=true&domainCode={domain}&purchaseOrderNumber={po}"
+
+
+def _field_change_url(base_url: str, field_name: str) -> str:
+    return f"{base_url}/api/erp/purchaseOrderLines/fieldChangeV2?fieldName={field_name}"
+
+
+def _is_received_url(base_url: str, domain: str, po: str, line: int) -> str:
+    return (
+        f"{base_url}/api/erp/purchaseOrderLines/isReceivedPurchaseOrderLineV2"
+        f"?domainCode={domain}&purchaseOrderNumber={po}&purchaseOrderLine={line}"
+    )
+
+
+def _sync_line_url(base_url: str) -> str:
+    return f"{base_url}/api/erp/purchaseOrderLinesGrid"
 
 # ── Mandatory columns — Header sheet ───────────────────────────────────────
 MANDATORY_HEADER_COLUMNS = [
@@ -153,33 +174,57 @@ PO_LINE_FIELD_TO_COLUMN = {
 
 
 # =============================================================================
-# 1. AUTHENTICATION  (unchanged token pattern)
+# 1. AUTHENTICATION
 # =============================================================================
-
-def _fetch_token() -> str:
-    token_url = f"{_BASE_URL}/oauth/token"
-    resp = requests.post(token_url, params=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("OAuth response did not contain access_token")
-    return token
-
+#
+# CHANGED (see explanation in chat): this script used to fetch its own OAuth
+# token from CONFIG['qad']['auth'] (a service-account username/password kept
+# in config.json). config.json no longer has a "qad" key — it now has
+# "environments": {"TEST": {...}, "PROD": {...}}, and those blocks only hold
+# base_url/client_id/grant_type, NOT a username/password. The real
+# username/password now only ever exists for the moment the user logs in via
+# main.py's /api/login, which performs the OAuth exchange itself and keeps
+# the resulting access_token server-side in SESSIONS[session_id].
+#
+# So TokenManager no longer knows how to mint its own token — it's handed
+# the token (and the base_url that token is valid against) that main.py
+# already obtained for this session, and just holds onto it for the run.
+#
+# If the token expires mid-run (401), this script CANNOT silently get a new
+# one — it never had the password. TokenManager.refresh() raises instead of
+# retrying, so process_file() surfaces a clear "please log in again" error
+# on that row rather than a crash.
 
 class TokenManager:
-    """Holds one token for the run; refreshes on demand (401)."""
+    """Holds the QAD access token + base_url for one run.
 
-    def __init__(self):
-        self._token: str | None = None
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]).
+    base_url: the qracore base_url for the session's environment
+              (same host used for the original OAuth call), e.g.
+              CONFIG['environments']['TEST']['base_url'].
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token    = token
+        self.base_url  = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here — the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of trying (and
+        # failing) to hit an /oauth/token endpoint with nothing to send.
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically — please log in again and re-run the load."
+        )
 
     def headers(self) -> dict:
         return {
@@ -189,35 +234,57 @@ class TokenManager:
 
 
 # =============================================================================
-# 2. HTTP HELPERS  (auto-refresh on 401, one retry — UNCHANGED behaviour)
+# 2. HTTP HELPERS
 # =============================================================================
+#
+# CHANGED: on a 401, these used to call tm.refresh() and silently retry —
+# that worked when refresh() could mint a brand-new token from stored
+# credentials. Now refresh() raises RuntimeError (see above), so that's
+# caught here: the retry is abandoned and the original 401 response is
+# returned as-is, which safe_get()/safe_post() below already translate into
+# a normalized "token expired" error for the row instead of an uncaught
+# exception killing the whole run.
 
 def api_get(url: str, tm: TokenManager) -> tuple[requests.Response, dict]:
-    """GET with one automatic token-refresh retry on 401."""
+    """GET with one refresh attempt on 401 (see note above)."""
+    resp = None
     for attempt in range(2):
         resp = requests.get(url, headers=tm.headers(), timeout=30)
         if resp.status_code == 401 and attempt == 0:
-            tm.refresh()
+            try:
+                tm.refresh()
+            except RuntimeError:
+                break
             continue
         try:
             return resp, resp.json()
         except Exception:
             return resp, {}
-    return resp, {}
+    try:
+        return resp, resp.json()
+    except Exception:
+        return resp, {}
 
 
 def api_post(url: str, payload: dict, tm: TokenManager) -> tuple[requests.Response, dict]:
-    """POST with one automatic token-refresh retry on 401."""
+    """POST with one refresh attempt on 401 (see note above)."""
+    resp = None
     for attempt in range(2):
         resp = requests.post(url, json=payload, headers=tm.headers(), timeout=30)
         if resp.status_code == 401 and attempt == 0:
-            tm.refresh()
+            try:
+                tm.refresh()
+            except RuntimeError:
+                break
             continue
         try:
             return resp, resp.json()
         except Exception:
             return resp, {}
-    return resp, {}
+    try:
+        return resp, resp.json()
+    except Exception:
+        return resp, {}
 
 
 # ── Normalized-error wrappers ────────────────────────────────────────────
@@ -232,7 +299,12 @@ def _network_error(exc: Exception) -> dict:
 
 
 def _token_error() -> dict:
-    return {"fieldName": None, "message": "Token refresh failed — unauthorised", "fieldValue": None, "code": None}
+    return {
+        "fieldName": None,
+        "message": "QAD session token expired or invalid — please log in again and re-run the load.",
+        "fieldValue": None,
+        "code": None,
+    }
 
 
 def _http_error(status_code: int) -> dict:
@@ -321,11 +393,20 @@ def _check_mandatory(row_data: dict, columns: list[str]) -> list[str]:
 # =============================================================================
 
 def ensure_columns(ws, *col_names: str) -> list:
-    """Add any missing column names to row 1 and return the full header list."""
-    header_row = [
-        cell.value.strip() if isinstance(cell.value, str) else cell.value
-        for cell in ws[1]
-    ]
+    """Add any missing column names to row 1 and return the full header list.
+
+    Stops at the first blank cell — real headers are always contiguous
+    from column 1, so this naturally excludes blank_template.py's hidden
+    dropdown-option columns further right (column 100+) from being read as
+    if they were data columns. Without this, a dropdown's option list
+    sharing row numbers with early data rows would make an otherwise-blank
+    row look "non-empty" to the any(row_values) checks below.
+    """
+    header_row = []
+    for cell in ws[1]:
+        if cell.value is None:
+            break
+        header_row.append(cell.value.strip() if isinstance(cell.value, str) else cell.value)
     for name in col_names:
         if name not in header_row:
             ws.cell(row=1, column=len(header_row) + 1, value=name)
@@ -439,7 +520,7 @@ def create_line(
 
     # 1. Initialise blank line — QAD returns the next available line number
     print("    ↳ Init line (QAD will assign number)...")
-    resp, resp_json, errors = safe_get(INIT_LINE_URL.format(domain=domain, po=po_num), tm)
+    resp, resp_json, errors = safe_get(_init_line_url(tm.base_url, domain, po_num), tm)
     if errors:
         return False, errors, 0
 
@@ -454,7 +535,7 @@ def create_line(
     # 2. fieldChange: siteCode
     line["siteCode"] = site_code
     resp, resp_json, errors = safe_post(
-        FIELD_CHANGE_URL.format(fieldName="siteCode"),
+        _field_change_url(tm.base_url, "siteCode"),
         {"purchaseOrderLines": [line]}, tm,
     )
     if errors:
@@ -467,7 +548,7 @@ def create_line(
     # 3. fieldChange: itemCode
     line["itemCode"] = item_code
     resp, resp_json, errors = safe_post(
-        FIELD_CHANGE_URL.format(fieldName="itemCode"),
+        _field_change_url(tm.base_url, "itemCode"),
         {"purchaseOrderLines": [line]}, tm,
     )
     if errors:
@@ -480,14 +561,14 @@ def create_line(
     time.sleep(0.1)
 
     # 4. isReceived check (fire-and-forget) — use QAD-assigned line number
-    safe_get(IS_RECEIVED_URL.format(domain=domain, po=po_num, line=line_number), tm)
+    safe_get(_is_received_url(tm.base_url, domain, po_num, line_number), tm)
 
     time.sleep(0.1)
 
     # 5. fieldChange: quantityOrdered
     line["quantityOrdered"] = qty
     resp, resp_json, errors = safe_post(
-        FIELD_CHANGE_URL.format(fieldName="quantityOrdered"),
+        _field_change_url(tm.base_url, "quantityOrdered"),
         {"purchaseOrderLines": [line]}, tm,
     )
     if errors:
@@ -500,7 +581,7 @@ def create_line(
     # 6. fieldChange: purchaseCost
     line["purchaseCost"] = price
     resp, resp_json, errors = safe_post(
-        FIELD_CHANGE_URL.format(fieldName="purchaseCost"),
+        _field_change_url(tm.base_url, "purchaseCost"),
         {"purchaseOrderLines": [line]}, tm,
     )
     if errors:
@@ -511,7 +592,7 @@ def create_line(
     line = lines[0]
 
     # 7. Sync / commit line
-    resp, resp_json, errors = safe_post(SYNC_LINE_URL, {"purchaseOrderLines": [line]}, tm)
+    resp, resp_json, errors = safe_post(_sync_line_url(tm.base_url), {"purchaseOrderLines": [line]}, tm)
     if errors:
         return False, errors, line_number
 
@@ -548,7 +629,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     header_rows: dict[str, tuple[int, dict]] = {}
     for row_idx, row in enumerate(ws_h.iter_rows(min_row=2), start=2):
         row_values = [cell.value for cell in row]
-        if not any(row_values):
+        if not any(row_values[:len(h_headers)]):
             continue
         row_data = dict(zip(h_headers, row_values))
         po_num   = sv(row_data, "PO Number")
@@ -559,7 +640,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
     line_rows: dict[str, list[tuple[int, dict]]] = defaultdict(list)
     for row_idx, row in enumerate(ws_l.iter_rows(min_row=2), start=2):
         row_values = [cell.value for cell in row]
-        if not any(row_values):
+        if not any(row_values[:len(l_headers)]):
             continue
         row_data = dict(zip(l_headers, row_values))
         po_num   = sv(row_data, "PO Number")
@@ -595,7 +676,7 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
                 continue
 
             payload = build_header_payload(h_row_data)
-            resp, resp_json, errors = safe_post(HEADER_URL, payload, tm)
+            resp, resp_json, errors = safe_post(_header_url(tm.base_url), payload, tm)
 
             if errors:
                 h_fail += 1
@@ -668,8 +749,15 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 # =============================================================================
 # 9. ORCHESTRATOR
 # =============================================================================
+#
+# CHANGED: run() used to build its own TokenManager() with zero arguments
+# (self-authenticating from config). It now takes an already-built
+# TokenManager (token + base_url) as a parameter, same as Customer_load.py —
+# constructed once by the caller (main.py per-session, or the __main__
+# block below for standalone CLI use) and reused across every file in the
+# folder.
 
-def run(folder_path: str) -> tuple[int, int]:
+def run(folder_path: str, tm: TokenManager) -> tuple[int, int]:
     folder = os.path.abspath(folder_path)
 
     if not os.path.exists(folder):
@@ -684,8 +772,6 @@ def run(folder_path: str) -> tuple[int, int]:
     if not xlsx_files:
         print(f"ERROR: No .xlsx files found in: {folder}")
         raise RuntimeError(f"No .xlsx files found in: {folder}")
-
-    tm = TokenManager()
 
     total_success = 0
     total_fail    = 0
@@ -721,10 +807,41 @@ def run(folder_path: str) -> tuple[int, int]:
 # =============================================================================
 # 10. ENTRY POINT
 # =============================================================================
+#
+# CHANGED: standalone CLI use now performs the same interactive OAuth login
+# Customer_load.py does (config.json has no stored service-account creds
+# to fetch a token with anymore). Set QAD_ENVIRONMENT / QAD_USERNAME /
+# QAD_PASSWORD to skip the prompts.
 
 if __name__ == "__main__":
+    import getpass
+    import requests as _requests
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = _requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
     folder = os.path.abspath(
         os.path.join(ROOT_DIR, CONFIG["folders"]["purchase_order"])
     )
-    ok, fail = run(folder)
+    ok, fail = run(folder, tm)
     sys.exit(0 if fail == 0 else 1)

@@ -345,33 +345,61 @@ def _canonicalize_header(raw_name: str) -> str:
 
 
 # =============================================================================
-# 1. AUTHENTICATION  (identical pattern to Customer_load.py)
+# 1. AUTHENTICATION
 # =============================================================================
-
-def _fetch_token() -> str:
-    url  = f"{CONFIG['qad']['base_url']}/oauth/token"
-    resp = requests.post(url, data=CONFIG["qad"]["auth"], timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("OAuth response did not contain access_token")
-    return token
-
+#
+# CHANGED (see explanation in chat): this script used to fetch its own OAuth
+# token from CONFIG['qad']['auth'], and every API call below built its URL
+# from tm.base_url. config.json no longer has a "qad" key at
+# all — it now has "environments": {"TEST": {...}, "PROD": {...}}, which
+# only holds base_url/client_id/grant_type, NOT a username/password. The
+# real username/password now only ever exists for the moment the user logs
+# in via main.py's /api/login, which performs the OAuth exchange itself and
+# keeps the resulting access_token server-side in SESSIONS[session_id].
+#
+# So TokenManager no longer knows how to mint its own token — it's handed
+# the token (and the base_url that token is valid against) that main.py
+# already obtained for this session, and just holds onto it for the run.
+# Every function below that used to build its URL from
+# tm.base_url now uses tm.base_url instead (it already takes
+# tm as a parameter, so this is a same-line substitution, not a signature
+# change).
+#
+# If the token expires mid-run (401), this script CANNOT silently get a new
+# one — it never had the password. TokenManager.refresh() raises instead of
+# retrying, so _call() immediately raises _TokenExpired instead of trying
+# (and failing) to hit an /oauth/token endpoint with nothing to send.
 
 class TokenManager:
-    """Holds one token for the run; refreshes on demand (401)."""
+    """Holds the QAD access token + base_url for one run.
 
-    def __init__(self):
-        self._token: str | None = None
+    token:    OAuth access token already obtained by main.py at login
+              (stored server-side in SESSIONS[session_id]).
+    base_url: the qracore base_url for the session's environment
+              (same host used for the original OAuth call), e.g.
+              CONFIG['environments']['TEST']['base_url'].
+    """
+
+    def __init__(self, token: str, base_url: str):
+        if not token:
+            raise ValueError("TokenManager requires a valid session access_token")
+        if not base_url:
+            raise ValueError("TokenManager requires a base_url")
+        self._token    = token
+        self.base_url  = base_url.rstrip("/")
 
     def get(self) -> str:
-        if self._token is None:
-            self._token = _fetch_token()
         return self._token
 
     def refresh(self) -> str:
-        self._token = _fetch_token()
-        return self._token
+        # No stored credentials to re-authenticate with from here — the
+        # session's token came from the user's login and this script never
+        # had the password. Surface this clearly instead of trying (and
+        # failing) to hit an /oauth/token endpoint with nothing to send.
+        raise RuntimeError(
+            "QAD session token expired mid-run and cannot be refreshed "
+            "automatically — please log in again and re-run the load."
+        )
 
 
 class _TokenExpired(Exception):
@@ -382,7 +410,9 @@ def _call(method: str, url: str, tm: TokenManager, **kwargs) -> requests.Respons
     """
     Single request with the same 'refresh only on 401, retry once' policy
     used everywhere else in this tool. Raises _TokenExpired if a refreshed
-    token still gets a 401 (caller decides what that means for the row).
+    token still gets a 401 (caller decides what that means for the row) —
+    or immediately, without retrying, if tm.refresh() itself raises (no
+    stored credentials to refresh with — see note above).
     """
     headers = kwargs.pop("headers", {})
     headers["Authorization"] = f"Bearer {tm.get()}"
@@ -390,7 +420,10 @@ def _call(method: str, url: str, tm: TokenManager, **kwargs) -> requests.Respons
     resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
 
     if resp.status_code == 401:
-        tm.refresh()
+        try:
+            tm.refresh()
+        except RuntimeError:
+            raise _TokenExpired()
         headers["Authorization"] = f"Bearer {tm.get()}"
         resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
         if resp.status_code == 401:
@@ -467,7 +500,7 @@ def post_bom_header(row: dict, tm: TokenManager) -> tuple[bool, list, dict]:
     """POST /boms. Returns (success, errors, created_bom_dict)."""
     payload = build_header_payload(row)
     url = (
-        f"{CONFIG['qad']['base_url']}/api/erp/boms"
+        f"{tm.base_url}/api/erp/boms"
         f"?viewUri=urn:be:com.qad.engineering.productstructure.IBom"
     )
     resp = _call("POST", url, tm, json=payload)
@@ -488,7 +521,7 @@ def post_bom_header(row: dict, tm: TokenManager) -> tuple[bool, list, dict]:
 
 def get_bom_header(domain: str, bom_code: str, tm: TokenManager) -> dict:
     """GET /boms — used to verify/refresh concurrencyHash after create."""
-    url = f"{CONFIG['qad']['base_url']}/api/erp/boms"
+    url = f"{tm.base_url}/api/erp/boms"
     resp = _call("GET", url, tm, params={"domainCode": domain, "bomCode": bom_code})
     try:
         resp_json = resp.json()
@@ -573,7 +606,7 @@ def initialize_tree_node(
     trace at that depth (the root-attach / Level 1 call omits it). Not yet
     confirmed whether componentType is ever anything other than "ITEM".
     """
-    url = f"{CONFIG['qad']['base_url']}/api/erp/bomComponentTreeNodes"
+    url = f"{tm.base_url}/api/erp/bomComponentTreeNodes"
     params = {
         "initialize":  "true",
         "domainCode":  domain,
@@ -600,7 +633,7 @@ def initialize_tree_node(
 
 def field_change(row_state: dict, field_name: str, tm: TokenManager) -> dict:
     """POST /bomComponents/fieldChange?fieldName=X -> updated row state."""
-    url = f"{CONFIG['qad']['base_url']}/api/erp/bomComponents/fieldChange"
+    url = f"{tm.base_url}/api/erp/bomComponents/fieldChange"
     payload = {"bomComponents": [row_state]}
     resp = _call("POST", url, tm, params={"fieldName": field_name}, json=payload)
     try:
@@ -613,7 +646,7 @@ def field_change(row_state: dict, field_name: str, tm: TokenManager) -> dict:
 
 def save_tree_node(row_state: dict, tm: TokenManager) -> tuple[bool, list]:
     """POST /bomComponentTreeNodes -> persist the component row."""
-    url = f"{CONFIG['qad']['base_url']}/api/erp/bomComponentTreeNodes"
+    url = f"{tm.base_url}/api/erp/bomComponentTreeNodes"
     row_state = dict(row_state)
     row_state["asOfDate"] = _now_iso()
     row_state["operation"] = 10  # insert — see ASSUMPTIONS in module docstring
@@ -1148,8 +1181,15 @@ def process_file(file_path: str, tm: TokenManager) -> tuple[int, int]:
 # =============================================================================
 # 7. ORCHESTRATOR
 # =============================================================================
+#
+# CHANGED: run() used to build its own TokenManager() with zero arguments
+# (self-authenticating from config). It now takes an already-built
+# TokenManager (token + base_url) as a parameter, same as every other
+# <Entity>_load.py — constructed once by the caller (main.py per-session,
+# or the __main__ block below for standalone CLI use) and reused across
+# every file in the folder.
 
-def run(folder_path: str) -> tuple[int, int]:
+def run(folder_path: str, tm: TokenManager) -> tuple[int, int]:
     folder = os.path.abspath(folder_path)
 
     if not os.path.exists(folder):
@@ -1162,8 +1202,6 @@ def run(folder_path: str) -> tuple[int, int]:
 
     if not xlsx_files:
         raise RuntimeError(f"No .xlsx files found in: {folder}")
-
-    tm = TokenManager()
 
     total_ok   = 0
     total_fail = 0
@@ -1194,10 +1232,45 @@ def run(folder_path: str) -> tuple[int, int]:
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
+#
+# CHANGED: standalone CLI use now performs the same interactive OAuth login
+# every other <Entity>_load.py does (config.json has no stored service-
+# account creds to fetch a token with anymore). Set QAD_ENVIRONMENT /
+# QAD_USERNAME / QAD_PASSWORD to skip the prompts.
+#
+# Also fixed: this used to read CONFIG["folders"]["product_structure"],
+# a key that doesn't exist in config.json (it's "BOM") — that line would
+# have raised KeyError the moment anyone actually ran this file directly.
 
 if __name__ == "__main__":
-    folder = os.path.abspath(
-        os.path.join(ROOT_DIR, CONFIG["folders"]["product_structure"])
+    import getpass
+    import requests as _requests
+
+    environment = os.environ.get("QAD_ENVIRONMENT", "TEST").upper()
+    env_cfg     = CONFIG["environments"][environment]
+
+    username = os.environ.get("QAD_USERNAME") or input("QAD username: ")
+    password = os.environ.get("QAD_PASSWORD") or getpass.getpass("QAD password: ")
+
+    token_resp = _requests.post(
+        f"{env_cfg['base_url']}/oauth/token",
+        data={
+            "client_id":  env_cfg["client_id"],
+            "username":   username,
+            "password":   password,
+            "grant_type": env_cfg.get("grant_type", "password"),
+        },
+        timeout=30,
     )
-    ok, fail = run(folder)
+    token_resp.raise_for_status()
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        sys.exit("ERROR: OAuth response did not contain access_token")
+
+    tm = TokenManager(token=access_token, base_url=env_cfg["base_url"])
+
+    folder = os.path.abspath(
+        os.path.join(ROOT_DIR, CONFIG["folders"]["BOM"])
+    )
+    ok, fail = run(folder, tm)
     sys.exit(0 if fail == 0 else 1)

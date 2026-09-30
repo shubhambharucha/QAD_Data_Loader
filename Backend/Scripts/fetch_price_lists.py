@@ -294,14 +294,59 @@ def call_browse_api(
 def iter_browse_rows(
     filters: list[FilterCriteria],
     tm: TokenManager,
-    page_size: int = 25,
+    # CHANGED: 25 -> 500. Every capture taken while chasing the page-2
+    # pagination question (three separate filters, page_size 25/50/100)
+    # topped out at 36 total matching rows on this instance — nothing
+    # tried has ever actually needed a second page. Raising this to a
+    # size comfortably above any realistic price-list-table row count
+    # means a normal fetch never touches the still-unconfirmed
+    # pageAction="next" path below at all. This is a workaround, not a
+    # fix — if the real catalog ever exceeds this in one filtered pull,
+    # pagination will trigger again and hit the exact same open question,
+    # just now failing fast with a clear message (see max_pages /
+    # duplicate-page detection below) instead of hanging.
+    page_size: int = 500,
+    max_pages: int = 400,  # 400 * 500 = 200,000 rows — last-resort circuit
+                            # breaker, not a real limit; duplicate-page
+                            # detection below is what actually catches a
+                            # broken pageAction quickly if page_size=500
+                            # isn't enough to dodge it.
 ) -> Iterator[dict]:
-    """Yields one flat Browse row dict at a time, handling pagination + 401 retry."""
+    """Yields one flat Browse row dict at a time, handling pagination + 401 retry.
+
+    CHANGED: added max_pages + duplicate-page detection. page_action="next"
+    for page 2+ was always flagged as an unconfirmed assumption (never
+    captured against a real page-2 request) — if QAD doesn't actually
+    recognize "next" and silently re-serves page 1 instead, the old
+    while-True loop would see the same non-empty rows and
+    HasMoreParams:true forever and never return, and since
+    fetch_to_excel() fully drains this generator (list(...)) before
+    writing anything or reporting progress, that looked exactly like
+    "Fetch never finishes" with no error and no feedback.
+
+    Now: if a fetched page's first row is identical to the previous
+    page's first row, pagination clearly isn't advancing — raise
+    immediately with a specific, actionable message instead of looping.
+    If pages keep advancing but genuinely never run out (unlikely, but
+    not impossible for an unfiltered fetch), max_pages is the fallback so
+    this still can't hang forever, just fails with a clear message
+    instead.
+    """
     call_id = str(uuid.uuid4())
     page = 1
     page_action = "first"
+    previous_first_row = None
 
     while True:
+        if page > max_pages:
+            raise RuntimeError(
+                f"Price list fetch stopped after {max_pages} pages "
+                f"({max_pages * page_size} rows) without QAD reporting "
+                f"HasMoreParams=false. Narrow your filters, or raise "
+                f"iter_browse_rows()'s max_pages if this fetch genuinely "
+                f"has more rows than that."
+            )
+
         for attempt in range(2):
             try:
                 resp_json = call_browse_api(filters, tm.get(), tm.base_url, page, page_size, page_action, call_id)
@@ -315,6 +360,27 @@ def iter_browse_rows(
         rows = resp_json.get("data") or []
         if not rows:
             return
+
+        if page > 1 and rows[0] == previous_first_row:
+            raise RuntimeError(
+                f"Price list fetch pagination did not advance: page {page} "
+                f"returned the same first row as page {page - 1}. QAD "
+                f"likely didn't recognize pageAction=\"next\" — that value "
+                f"was always an unconfirmed guess (see call_browse_api's "
+                f"docstring). Capture a real page-2 request in the browser "
+                f"network tab (filter one price list down to >25 matching "
+                f"rows, watch the second /browses call) and send me the "
+                f"actual pageAction value QAD's own UI sends."
+            )
+        previous_first_row = rows[0]
+
+        if _progress_callback:
+            # Best-effort "still alive" signal during the browse phase —
+            # fetch_to_excel()'s own progress calls only start once writing
+            # begins, which is after this generator is fully drained, so
+            # without this the browse phase reports nothing at all.
+            _progress_callback(page * page_size, -1)
+
         for row in rows:
             yield row
 
